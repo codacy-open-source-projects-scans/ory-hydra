@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -19,8 +20,8 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/ory/fosite"
 	"github.com/ory/hydra/v2/client"
+	"github.com/ory/hydra/v2/fosite"
 )
 
 func TestSanitizeClient(t *testing.T) {
@@ -39,52 +40,27 @@ func TestSanitizeClient(t *testing.T) {
 
 func TestMatchScopes(t *testing.T) {
 	for k, tc := range []struct {
-		granted         []flow.AcceptOAuth2ConsentRequest
-		requested       []string
-		expectChallenge string
-	}{
-		{
-			granted:         []flow.AcceptOAuth2ConsentRequest{{ID: "1", GrantedScope: []string{"foo", "bar"}}},
-			requested:       []string{"foo", "bar"},
-			expectChallenge: "1",
-		},
-		{
-			granted:         []flow.AcceptOAuth2ConsentRequest{{ID: "1", GrantedScope: []string{"foo", "bar"}}},
-			requested:       []string{"foo", "bar", "baz"},
-			expectChallenge: "",
-		},
-		{
-			granted: []flow.AcceptOAuth2ConsentRequest{
-				{ID: "1", GrantedScope: []string{"foo", "bar"}},
-				{ID: "2", GrantedScope: []string{"foo", "bar"}},
-			},
-			requested:       []string{"foo", "bar"},
-			expectChallenge: "1",
-		},
-		{
-			granted: []flow.AcceptOAuth2ConsentRequest{
-				{ID: "1", GrantedScope: []string{"foo", "bar"}},
-				{ID: "2", GrantedScope: []string{"foo", "bar", "baz"}},
-			},
-			requested:       []string{"foo", "bar", "baz"},
-			expectChallenge: "2",
-		},
-		{
-			granted: []flow.AcceptOAuth2ConsentRequest{
-				{ID: "1", GrantedScope: []string{"foo", "bar"}},
-				{ID: "2", GrantedScope: []string{"foo", "bar", "baz"}},
-			},
-			requested:       []string{"zab"},
-			expectChallenge: "",
-		},
-	} {
+		granted, requested []string
+		expected           bool
+	}{{
+		granted:   []string{"foo", "bar"},
+		requested: []string{"foo", "bar"},
+		expected:  true,
+	}, {
+		granted:   []string{"foo", "bar"},
+		requested: []string{"foo", "bar", "baz"},
+		expected:  false,
+	}, {
+		granted:   []string{"foo", "bar"},
+		requested: []string{"foo"},
+		expected:  true,
+	}, {
+		granted:   []string{"foo", "bar"},
+		requested: []string{"zab", "baz"},
+		expected:  false,
+	}} {
 		t.Run(fmt.Sprintf("case=%d", k), func(t *testing.T) {
-			got := matchScopes(fosite.ExactScopeStrategy, tc.granted, tc.requested)
-			if tc.expectChallenge == "" {
-				assert.Nil(t, got)
-				return
-			}
-			assert.Equal(t, tc.expectChallenge, got.ID)
+			assert.Equal(t, tc.expected, matchScopes(fosite.ExactScopeStrategy, tc.granted, tc.requested))
 		})
 	}
 }
@@ -167,7 +143,7 @@ func TestValidateCsrfSession(t *testing.T) {
 		{
 			cookies: []cookie{
 				{
-					name:      legacyCsrfSessionName(name),
+					name:      legacyCSRFSessionName(name),
 					csrfValue: "CSRF-VALUE",
 					sameSite:  http.SameSiteDefaultMode,
 				},
@@ -179,7 +155,7 @@ func TestValidateCsrfSession(t *testing.T) {
 		{
 			cookies: []cookie{
 				{
-					name:      legacyCsrfSessionName(name),
+					name:      legacyCSRFSessionName(name),
 					csrfValue: "CSRF-VALUE",
 					sameSite:  http.SameSiteDefaultMode,
 				},
@@ -192,7 +168,7 @@ func TestValidateCsrfSession(t *testing.T) {
 		{
 			cookies: []cookie{
 				{
-					name:      legacyCsrfSessionName(name),
+					name:      legacyCSRFSessionName(name),
 					csrfValue: "CSRF-VALUE",
 					sameSite:  http.SameSiteDefaultMode,
 				},
@@ -210,7 +186,7 @@ func TestValidateCsrfSession(t *testing.T) {
 					sameSite:  http.SameSiteNoneMode,
 				},
 				{
-					name:      legacyCsrfSessionName(name),
+					name:      legacyCSRFSessionName(name),
 					csrfValue: "CSRF-VALUE",
 					sameSite:  http.SameSiteDefaultMode,
 				},
@@ -227,7 +203,7 @@ func TestValidateCsrfSession(t *testing.T) {
 					sameSite:  http.SameSiteNoneMode,
 				},
 				{
-					name:      legacyCsrfSessionName(name),
+					name:      legacyCSRFSessionName(name),
 					csrfValue: "CSRF-VALUE",
 					sameSite:  http.SameSiteDefaultMode,
 				},
@@ -267,7 +243,7 @@ func TestValidateCsrfSession(t *testing.T) {
 				assert.NoError(t, err, "failed to save cookie %s", c.name)
 			}
 
-			err := ValidateCsrfSession(r, config, store, name, tc.csrfValue, new(flow.Flow))
+			err := ValidateCSRFSession(t.Context(), r, config, store, name, tc.csrfValue, new(flow.Flow))
 			if tc.expectError {
 				assert.Error(t, err)
 			} else {
@@ -404,7 +380,7 @@ func TestCreateCsrfSession(t *testing.T) {
 			config.EXPECT().CookieSecure(gomock.Any()).Return(tc.secure).AnyTimes()
 			config.EXPECT().CookieDomain(gomock.Any()).Return(tc.domain).AnyTimes()
 
-			err := createCsrfSession(rr, req, config, store, tc.name, "value", tc.maxAge)
+			err := createCSRFSession(t.Context(), rr, req, config, store, tc.name, "value", tc.maxAge)
 			assert.NoError(t, err)
 
 			cookies := make(map[string]cookie)
@@ -418,6 +394,45 @@ func TestCreateCsrfSession(t *testing.T) {
 				}
 			}
 			assert.Equal(t, tc.expectedCookies, cookies)
+		})
+	}
+}
+
+func TestCaseInsensitiveFilterParam(t *testing.T) {
+	for k, tc := range []struct {
+		requestedQuery string
+		key            string
+
+		expectedQuery url.Values
+	}{
+		{
+			requestedQuery: "key=value",
+			key:            "key2",
+			expectedQuery:  url.Values{"key": []string{"value"}},
+		},
+		{
+			requestedQuery: "KeY=value",
+			key:            "key",
+			expectedQuery:  url.Values{"KeY": []string{"****"}},
+		},
+		{
+			requestedQuery: "KeY=value",
+			key:            "kEy",
+			expectedQuery:  url.Values{"KeY": []string{"****"}},
+		},
+		{
+			requestedQuery: "key=value&KEY2=value2",
+			key:            "key2",
+			expectedQuery:  url.Values{"key": []string{"value"}, "KEY2": []string{"****"}},
+		},
+	} {
+		t.Run(fmt.Sprintf("case=%d", k), func(t *testing.T) {
+			query, err := url.ParseQuery(tc.requestedQuery)
+			assert.NoError(t, err)
+
+			q := caseInsensitiveFilterParam(query, tc.key)
+
+			assert.Equal(t, tc.expectedQuery, q)
 		})
 	}
 }

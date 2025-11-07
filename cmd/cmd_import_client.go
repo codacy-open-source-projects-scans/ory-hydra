@@ -47,7 +47,7 @@ Alternatively:
 
 To encrypt an auto-generated OAuth2 Client Secret, use flags ` + "`--pgp-key`" + `, ` + "`--pgp-key-url`" + ` or ` + "`--keybase`" + ` flag, for example:
 
-  {{ .CommandPath }} -n "my app" -g client_credentials -r token -a core,foobar --keybase keybase_username
+  {{ .CommandPath }} --name "my app" --grant-type client_credentials --response-type token --scope core,foobar --keybase keybase_username
 `,
 		Long: `This command reads in each listed JSON file and imports their contents as a list of OAuth 2.0 Clients.
 
@@ -75,7 +75,7 @@ Please be aware that this command does not update existing clients. If the clien
 
 			streams := map[string]io.Reader{"STDIN": cmd.InOrStdin()}
 			for _, path := range args {
-				contents, err := os.ReadFile(path)
+				contents, err := os.ReadFile(path) // #nosec G304
 				if err != nil {
 					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Could not open file %s: %s", path, err)
 					return cmdx.FailSilently(cmd)

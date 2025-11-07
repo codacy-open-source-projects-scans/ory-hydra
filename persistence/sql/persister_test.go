@@ -8,26 +8,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ory/hydra/v2/consent/test"
-
 	"github.com/go-jose/go-jose/v3"
-
-	"github.com/gobuffalo/pop/v6"
 	"github.com/gofrs/uuid"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ory/hydra/v2/client"
+	"github.com/ory/hydra/v2/consent/test"
+	"github.com/ory/hydra/v2/driver"
 	"github.com/ory/hydra/v2/internal/testhelpers"
+	"github.com/ory/hydra/v2/jwk"
 	"github.com/ory/hydra/v2/oauth2/trust"
+	"github.com/ory/pop/v6"
 	"github.com/ory/x/contextx"
 	"github.com/ory/x/dbal"
 	"github.com/ory/x/networkx"
-
-	"github.com/ory/hydra/v2/jwk"
-
-	"github.com/ory/hydra/v2/driver"
+	"github.com/ory/x/servicelocatorx"
 )
 
 func init() {
@@ -36,31 +34,62 @@ func init() {
 	})
 }
 
-func testRegistry(t *testing.T, ctx context.Context, k string, t1 driver.Registry, t2 driver.Registry) {
-	t.Run("package=client/manager="+k, func(t *testing.T) {
-		t.Run("case=create-get-update-delete", client.TestHelperCreateGetUpdateDeleteClient(k, t1.Persister().Connection(context.Background()), t1.ClientManager(), t2.ClientManager()))
-
-		t.Run("case=autogenerate-key", client.TestHelperClientAutoGenerateKey(k, t1.ClientManager()))
-
-		t.Run("case=auth-client", client.TestHelperClientAuthenticate(k, t1.ClientManager()))
-
-		t.Run("case=update-two-clients", client.TestHelperUpdateTwoClients(k, t1.ClientManager()))
-	})
-
-	parallel := true
-	if k == "memory" || k == "mysql" || k == "cockroach" { // TODO enable parallel tests for cockroach once we configure the cockroach integration test server to support retry
+func testRegistry(t *testing.T, db string, t1, t2 *driver.RegistrySQL) {
+	// TODO enable parallel tests for cockroach once we configure the cockroach integration test server to support retry
+	var parallel bool
+	switch db {
+	case "memory", "mysql", "cockroach":
 		parallel = false
+	default:
+		parallel = true
 	}
 
-	t.Run("package=consent/manager="+k, test.ManagerTests(t1, t1.ConsentManager(), t1.ClientManager(), t1.OAuth2Storage(), "t1", parallel))
-	t.Run("package=consent/manager="+k, test.ManagerTests(t2, t2.ConsentManager(), t2.ClientManager(), t2.OAuth2Storage(), "t2", parallel))
+	t.Run("client", func(t *testing.T) {
+		if parallel {
+			// currently not possible as we have a lot of side-effects on listing of the clients between this and other tests
+			// t.Parallel()
+		}
 
-	t.Run("parallel-boundary", func(t *testing.T) {
-		t.Run("package=consent/janitor="+k, testhelpers.JanitorTests(t1, "t1", parallel))
-		t.Run("package=consent/janitor="+k, testhelpers.JanitorTests(t2, "t2", parallel))
+		t.Run("case=create-get-update-delete", client.TestHelperCreateGetUpdateDeleteClient(t1.ClientManager(), t2.ClientManager()))
+
+		t.Run("case=autogenerate-key", client.TestHelperClientAutoGenerateKey(t1.ClientManager()))
+
+		t.Run("case=auth-client", client.TestHelperClientAuthenticate(t1.ClientManager()))
+
+		t.Run("case=update-two-clients", client.TestHelperUpdateTwoClients(t1.ClientManager()))
 	})
 
-	t.Run("package=jwk/manager="+k, func(t *testing.T) {
+	for _, reg := range []*driver.RegistrySQL{t1, t2} {
+		t.Run("consent", func(t *testing.T) {
+			if parallel {
+				t.Parallel()
+			}
+			test.ConsentManagerTests(t, reg, reg.ConsentManager(), reg.LoginManager(), reg.ClientManager(), reg.OAuth2Storage())
+		})
+
+		t.Run("login", func(t *testing.T) {
+			if parallel {
+				t.Parallel()
+			}
+			test.LoginManagerTest(t, reg, reg.LoginManager())
+		})
+
+		t.Run("obfuscated subject", func(t *testing.T) {
+			if parallel {
+				t.Parallel()
+			}
+			test.ObfuscatedSubjectManagerTest(t, reg, reg.ObfuscatedSubjectManager(), reg.ClientManager())
+		})
+
+		t.Run("logout", func(t *testing.T) {
+			if parallel {
+				t.Parallel()
+			}
+			test.LogoutManagerTest(t, reg.LogoutManager(), reg.ClientManager())
+		})
+	}
+
+	t.Run("jwk", func(t *testing.T) {
 		for _, tc := range []struct {
 			alg  string
 			skip bool
@@ -83,7 +112,7 @@ func testRegistry(t *testing.T, ctx context.Context, k string, t1 driver.Registr
 				} else {
 					kid, err := uuid.NewV4()
 					require.NoError(t, err)
-					ks, err := jwk.GenerateJWK(context.Background(), jose.SignatureAlgorithm(tc.alg), kid.String(), "sig")
+					ks, err := jwk.GenerateJWK(jose.SignatureAlgorithm(tc.alg), kid.String(), "sig")
 					require.NoError(t, err)
 					t.Run("TestManagerKey", jwk.TestHelperManagerKey(t1.KeyManager(), tc.alg, ks, kid.String()))
 					t.Run("Parallel", func(t *testing.T) {
@@ -105,28 +134,24 @@ func testRegistry(t *testing.T, ctx context.Context, k string, t1 driver.Registr
 		})
 	})
 
-	t.Run("package=grant/trust/manager="+k, func(t *testing.T) {
-		t.Run("parallel-boundary", func(t *testing.T) {
+	t.Run("trust", func(t *testing.T) {
+		t.Run("parallel boundary", func(t *testing.T) {
 			t.Run("case=create-get-delete/network=t1", trust.TestHelperGrantManagerCreateGetDeleteGrant(t1.GrantManager(), t1.KeyManager(), parallel))
 			t.Run("case=create-get-delete/network=t2", trust.TestHelperGrantManagerCreateGetDeleteGrant(t2.GrantManager(), t2.KeyManager(), parallel))
 		})
-		t.Run("parallel-boundary", func(t *testing.T) {
-			t.Run("case=errors", trust.TestHelperGrantManagerErrors(t1.GrantManager(), t1.KeyManager(), parallel))
-			t.Run("case=errors", trust.TestHelperGrantManagerErrors(t2.GrantManager(), t2.KeyManager(), parallel))
+		t.Run("parallel boundary", func(t *testing.T) {
+			t.Run("case=errors", trust.TestHelperGrantManagerErrors(t1.GrantManager(), t1.KeyManager()))
+			t.Run("case=errors", trust.TestHelperGrantManagerErrors(t2.GrantManager(), t2.KeyManager()))
 		})
 	})
 }
 
 func TestManagersNextGen(t *testing.T) {
-	regs := map[string]driver.Registry{
-		"memory": testhelpers.NewRegistrySQLFromURL(t, dbal.NewSQLiteTestDatabase(t), true, &contextx.Default{}),
-	}
+	t.Parallel()
 
-	if !testing.Short() {
-		regs["postgres"], regs["mysql"], regs["cockroach"], _ = testhelpers.ConnectDatabases(t, true, &contextx.Default{})
-	}
+	regs := testhelpers.ConnectDatabases(t, true, driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.TestContextualizer{})))
 
-	ctx := context.Background()
+	ctx := t.Context()
 	networks := make([]uuid.UUID, 5)
 	for k := range networks {
 		nid := uuid.Must(uuid.NewV4())
@@ -137,11 +162,6 @@ func TestManagersNextGen(t *testing.T) {
 	}
 
 	for k := range regs {
-		regs[k].WithContextualizer(new(contextx.TestContextualizer))
-	}
-
-	for k := range regs {
-		k := k
 		t.Run("database="+k, func(t *testing.T) {
 			t.Parallel()
 			client.TestHelperCreateGetUpdateDeleteClientNext(t, regs[k].Persister(), networks)
@@ -150,43 +170,109 @@ func TestManagersNextGen(t *testing.T) {
 }
 
 func TestManagers(t *testing.T) {
-	ctx := context.TODO()
-	t1registries := map[string]driver.Registry{
-		"memory": testhelpers.NewRegistrySQLFromURL(t, dbal.NewSQLiteTestDatabase(t), true, &contextx.Default{}),
-	}
+	t.Parallel()
 
-	t2registries := map[string]driver.Registry{
-		"memory": testhelpers.NewRegistrySQLFromURL(t, dbal.NewSQLiteTestDatabase(t), false, &contextx.Default{}),
-	}
+	regs1, regs2, regsInvalid := make(map[string]*driver.RegistrySQL), make(map[string]*driver.RegistrySQL), make(map[string]*driver.RegistrySQL)
+	network1NID, network2NID, invalidNID := uuid.Must(uuid.NewV4()), uuid.Must(uuid.NewV4()), uuid.Must(uuid.NewV4())
+
+	sqlite := dbal.NewSQLiteTestDatabase(t)
+	var err error
+	regs1["memory"], err = testhelpers.NewRegistrySQLFromURL(t.Context(), sqlite, true,
+		driver.DisableValidation(),
+		driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.Static{NID: network1NID})))
+	require.NoError(t, err)
+	regs2["memory"], err = testhelpers.NewRegistrySQLFromURL(t.Context(), sqlite, false,
+		driver.DisableValidation(),
+		driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.Static{NID: network2NID})))
+	require.NoError(t, err)
+	regsInvalid["memory"], err = testhelpers.NewRegistrySQLFromURL(t.Context(), sqlite, false,
+		driver.DisableValidation(),
+		driver.SkipNetworkInit(),
+		driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.Static{NID: invalidNID})))
+	require.NoError(t, err)
 
 	if !testing.Short() {
-		t2registries["postgres"], t2registries["mysql"], t2registries["cockroach"], _ = testhelpers.ConnectDatabases(t, false, &contextx.Default{})
-		t1registries["postgres"], t1registries["mysql"], t1registries["cockroach"], _ = testhelpers.ConnectDatabases(t, true, &contextx.Default{})
+		pg, mysql, crdb := testhelpers.ConnectDatabasesURLs(t)
+		eg, ctx := errgroup.WithContext(t.Context())
+		eg.Go(func() (err error) {
+			regs1["postgres"], err = testhelpers.NewRegistrySQLFromURL(ctx, pg, true,
+				driver.DisableValidation(),
+				driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.Static{NID: network1NID})))
+			return
+		})
+		eg.Go(func() (err error) {
+			regs1["mysql"], err = testhelpers.NewRegistrySQLFromURL(ctx, mysql, true,
+				driver.DisableValidation(),
+				driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.Static{NID: network1NID})))
+			return
+		})
+		eg.Go(func() (err error) {
+			regs1["cockroach"], err = testhelpers.NewRegistrySQLFromURL(ctx, crdb, true,
+				driver.DisableValidation(),
+				driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.Static{NID: network1NID})))
+			return
+		})
+		require.NoError(t, eg.Wait())
+
+		regs2["postgres"], err = testhelpers.NewRegistrySQLFromURL(t.Context(), pg, false,
+			driver.DisableValidation(),
+			driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.Static{NID: network2NID})))
+		require.NoError(t, err)
+		regsInvalid["postgres"], err = testhelpers.NewRegistrySQLFromURL(t.Context(), pg, false,
+			driver.DisableValidation(),
+			driver.SkipNetworkInit(),
+			driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.Static{NID: invalidNID})))
+		require.NoError(t, err)
+		regs2["mysql"], err = testhelpers.NewRegistrySQLFromURL(t.Context(), mysql, false,
+			driver.DisableValidation(),
+			driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.Static{NID: network2NID})))
+		require.NoError(t, err)
+		regsInvalid["mysql"], err = testhelpers.NewRegistrySQLFromURL(t.Context(), mysql, false,
+			driver.DisableValidation(),
+			driver.SkipNetworkInit(),
+			driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.Static{NID: invalidNID})))
+		require.NoError(t, err)
+		regs2["cockroach"], err = testhelpers.NewRegistrySQLFromURL(t.Context(), crdb, false,
+			driver.DisableValidation(),
+			driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.Static{NID: network2NID})))
+		require.NoError(t, err)
+		regsInvalid["cockroach"], err = testhelpers.NewRegistrySQLFromURL(t.Context(), crdb, false,
+			driver.DisableValidation(),
+			driver.SkipNetworkInit(),
+			driver.WithServiceLocatorOptions(servicelocatorx.WithContextualizer(&contextx.Static{NID: invalidNID})))
+		require.NoError(t, err)
 	}
 
-	network1NID, _ := uuid.NewV4()
-	network2NID, _ := uuid.NewV4()
+	for db, r1 := range regs1 {
+		t.Run(db, func(t *testing.T) {
+			t.Parallel()
 
-	for k, t1 := range t1registries {
-		t2 := t2registries[k]
-		require.NoError(t, t1.Persister().Connection(ctx).Create(&networkx.Network{ID: network1NID}))
-		require.NoError(t, t2.Persister().Connection(ctx).Create(&networkx.Network{ID: network2NID}))
-		t1.WithContextualizer(&contextx.Static{NID: network1NID, C: t1.Config().Source(context.Background())})
-		t2.WithContextualizer(&contextx.Static{NID: network2NID, C: t2.Config().Source(context.Background())})
-		t.Run("parallel-boundary", func(t *testing.T) { testRegistry(t, ctx, k, t1, t2) })
-	}
+			r2 := regs2[db]
+			rInv := regsInvalid[db]
 
-	for k, t1 := range t1registries {
-		t2 := t2registries[k]
-		t2.WithContextualizer(&contextx.Static{NID: uuid.Nil, C: t2.Config().Source(context.Background())})
+			r1.Persister()
+			require.NoError(t, r1.Persister().Connection(t.Context()).Create(&networkx.Network{ID: network1NID}))
+			require.NoError(t, r1.Persister().Connection(t.Context()).Create(&networkx.Network{ID: network2NID}))
 
-		if !t1.Config().HSMEnabled() { // We don't support NID isolation with HSM at the moment
-			t.Run("package=jwk/manager="+k+"/case=nid",
-				jwk.TestHelperNID(t1.KeyManager(), t2.KeyManager()),
+			require.Equal(t, network1NID, r1.Persister().NetworkID(t.Context()))
+			require.Equal(t, network2NID, r2.Persister().NetworkID(t.Context()))
+			require.Equal(t, invalidNID, rInv.Persister().NetworkID(t.Context()))
+
+			t.Run("parallel boundary", func(t *testing.T) { testRegistry(t, db, r1, r2) })
+
+			if db == "memory" {
+				// The following tests rely on foreign key constraints, which some of them are not correctly created in the SQLite schema.
+				return
+			}
+
+			// if !r1.Config().HSMEnabled() {
+			t.Run("jwk nid",
+				jwk.TestHelperNID(r1.KeyManager(), rInv.KeyManager()),
 			)
-		}
-		t.Run("package=consent/manager="+k+"/case=nid",
-			test.TestHelperNID(t1, t1.ConsentManager(), t2.ConsentManager()),
-		)
+			// }
+			t.Run("login nid",
+				test.LoginNIDTest(r1.Persister(), rInv.Persister()),
+			)
+		})
 	}
 }

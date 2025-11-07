@@ -16,38 +16,36 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/exp/slices"
-	"golang.org/x/oauth2"
-
-	"github.com/ory/x/pointerx"
-
-	"github.com/tidwall/gjson"
-
 	"github.com/pborman/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ory/hydra/v2/internal/testhelpers"
-	"github.com/ory/x/contextx"
-
-	"github.com/ory/fosite"
-	"github.com/ory/x/urlx"
-	"github.com/ory/x/uuidx"
+	"github.com/tidwall/gjson"
+	"golang.org/x/exp/slices"
+	"golang.org/x/oauth2"
 
 	hydra "github.com/ory/hydra-client-go/v2"
 	"github.com/ory/hydra/v2/client"
+	"github.com/ory/hydra/v2/driver"
 	"github.com/ory/hydra/v2/driver/config"
+	"github.com/ory/hydra/v2/fosite"
+	"github.com/ory/hydra/v2/internal/testhelpers"
+	"github.com/ory/x/configx"
+	"github.com/ory/x/pointerx"
+	"github.com/ory/x/urlx"
+	"github.com/ory/x/uuidx"
 )
 
 func TestStrategyLoginConsentNext(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
-	reg := testhelpers.NewMockedRegistry(t, &contextx.Default{})
-	reg.Config().MustSet(ctx, config.KeyAccessTokenStrategy, "opaque")
-	reg.Config().MustSet(ctx, config.KeyConsentRequestMaxAge, time.Hour)
-	reg.Config().MustSet(ctx, config.KeyConsentRequestMaxAge, time.Hour)
-	reg.Config().MustSet(ctx, config.KeyScopeStrategy, "exact")
-	reg.Config().MustSet(ctx, config.KeySubjectTypesSupported, []string{"pairwise", "public"})
-	reg.Config().MustSet(ctx, config.KeySubjectIdentifierAlgorithmSalt, "76d5d2bf-747f-4592-9fbd-d2b895a54b3a")
+	reg := testhelpers.NewRegistryMemory(t, driver.WithConfigOptions(configx.WithValues(map[string]any{
+		config.KeyAccessTokenStrategy:            "opaque",
+		config.KeyConsentRequestMaxAge:           time.Hour,
+		config.KeyScopeStrategy:                  "exact",
+		config.KeySubjectTypesSupported:          []string{"pairwise", "public"},
+		config.KeySubjectIdentifierAlgorithmSalt: "76d5d2bf-747f-4592-9fbd-d2b895a54b3a",
+	})))
 
 	publicTS, adminTS := testhelpers.NewOAuth2Server(ctx, t, reg)
 	adminClient := hydra.NewAPIClient(hydra.NewConfiguration())
@@ -115,7 +113,7 @@ func TestStrategyLoginConsentNext(t *testing.T) {
 
 		makeRequestAndExpectError(
 			t, hc, c, url.Values{"login_verifier": {"does-not-exist"}},
-			"The resource owner or authorization server denied the request. The login verifier is invalid",
+			"The resource owner or authorization server denied the request. The login verifier has already been used, has not been granted, or is invalid.",
 		)
 	})
 
@@ -207,11 +205,12 @@ func TestStrategyLoginConsentNext(t *testing.T) {
 
 		testhelpers.NewLoginConsentUI(t, reg.Config(),
 			func(w http.ResponseWriter, r *http.Request) {
+				loginChallenge = r.URL.Query().Get("login_challenge")
 				res, _, err := adminClient.OAuth2API.GetOAuth2LoginRequest(ctx).
-					LoginChallenge(r.URL.Query().Get("login_challenge")).
+					LoginChallenge(loginChallenge).
 					Execute()
 				require.NoError(t, err)
-				loginChallenge = res.Challenge
+				require.Equal(t, loginChallenge, res.Challenge)
 
 				v, _, err := adminClient.OAuth2API.AcceptOAuth2LoginRequest(ctx).
 					LoginChallenge(loginChallenge).
@@ -222,11 +221,12 @@ func TestStrategyLoginConsentNext(t *testing.T) {
 				http.Redirect(w, r, v.RedirectTo, http.StatusFound)
 			},
 			func(w http.ResponseWriter, r *http.Request) {
+				consentChallenge = r.URL.Query().Get("consent_challenge")
 				res, _, err := adminClient.OAuth2API.GetOAuth2ConsentRequest(ctx).
-					ConsentChallenge(r.URL.Query().Get("consent_challenge")).
+					ConsentChallenge(consentChallenge).
 					Execute()
 				require.NoError(t, err)
-				consentChallenge = res.Challenge
+				require.Equal(t, consentChallenge, res.Challenge)
 
 				v, _, err := adminClient.OAuth2API.AcceptOAuth2ConsentRequest(ctx).
 					ConsentChallenge(consentChallenge).
@@ -319,7 +319,7 @@ func TestStrategyLoginConsentNext(t *testing.T) {
 			token, err := conf.Exchange(context.Background(), code)
 			require.NoError(t, err)
 
-			claims := testhelpers.IntrospectToken(t, conf, token.AccessToken, adminTS)
+			claims := testhelpers.IntrospectToken(t, token.AccessToken, adminTS)
 			assert.Equalf(t, `"bar"`, claims.Get("ext.foo").Raw, "%s", claims.Raw)      // Raw rather than .Int() or .Value() to verify the exact JSON payload
 			assert.Equalf(t, "1723546027", claims.Get("ext.ts1").Raw, "%s", claims.Raw) // must round-trip as integer
 
@@ -425,7 +425,7 @@ func TestStrategyLoginConsentNext(t *testing.T) {
 		assert.EqualValues(t, http.StatusFound, oauthRes.StatusCode)
 		loginChallengeRedirect, err := oauthRes.Location()
 		require.NoError(t, err)
-		defer oauthRes.Body.Close()
+		defer oauthRes.Body.Close() //nolint:errcheck
 
 		foundLoginCookie := slices.ContainsFunc(oauthRes.Header.Values("set-cookie"), func(sc string) bool {
 			ok, err := regexp.MatchString(fmt.Sprintf("ory_hydra_login_csrf_dev_%s=.*Max-Age=%.0f;.*", c.CookieSuffix(), consentRequestMaxAge), sc)
@@ -436,13 +436,13 @@ func TestStrategyLoginConsentNext(t *testing.T) {
 
 		loginChallengeRes, err := hc.Get(loginChallengeRedirect.String())
 		require.NoError(t, err)
-		defer loginChallengeRes.Body.Close()
+		defer loginChallengeRes.Body.Close() //nolint:errcheck
 
 		loginVerifierRedirect, err := loginChallengeRes.Location()
 		require.NoError(t, err)
 		loginVerifierRes, err := hc.Get(loginVerifierRedirect.String())
 		require.NoError(t, err)
-		defer loginVerifierRes.Body.Close()
+		defer loginVerifierRes.Body.Close() //nolint:errcheck
 
 		foundConsentCookie := slices.ContainsFunc(loginVerifierRes.Header.Values("set-cookie"), func(sc string) bool {
 			ok, err := regexp.MatchString(fmt.Sprintf("ory_hydra_consent_csrf_dev_%s=.*Max-Age=%.0f;.*", c.CookieSuffix(), consentRequestMaxAge), sc)
@@ -514,17 +514,17 @@ func TestStrategyLoginConsentNext(t *testing.T) {
 			assert.EqualValues(t, http.StatusFound, oauthRes.StatusCode)
 			loginChallengeRedirect, err := oauthRes.Location()
 			require.NoError(t, err)
-			defer oauthRes.Body.Close()
+			defer oauthRes.Body.Close() //nolint:errcheck
 
 			loginChallengeRes, err := hc.Get(loginChallengeRedirect.String())
 			require.NoError(t, err)
-			defer loginChallengeRes.Body.Close()
+			defer loginChallengeRes.Body.Close() //nolint:errcheck
 			loginVerifierRedirect, err := loginChallengeRes.Location()
 			require.NoError(t, err)
 
 			loginVerifierRes, err := hc.Get(loginVerifierRedirect.String())
 			require.NoError(t, err)
-			defer loginVerifierRes.Body.Close()
+			defer loginVerifierRes.Body.Close() //nolint:errcheck
 
 			setCookieHeader := loginVerifierRes.Header.Get("set-cookie")
 			assert.NotNil(t, setCookieHeader)
@@ -603,17 +603,17 @@ func TestStrategyLoginConsentNext(t *testing.T) {
 		assert.EqualValues(t, http.StatusFound, oauthRes.StatusCode)
 		loginChallengeRedirect, err := oauthRes.Location()
 		require.NoError(t, err)
-		defer oauthRes.Body.Close()
+		defer oauthRes.Body.Close() //nolint:errcheck
 
 		loginChallengeRes, err := hc.Get(loginChallengeRedirect.String())
 		require.NoError(t, err)
-		defer loginChallengeRes.Body.Close()
+		defer loginChallengeRes.Body.Close() //nolint:errcheck
 
 		loginVerifierRedirect, err := loginChallengeRes.Location()
 		require.NoError(t, err)
 		loginVerifierRes, err := hc.Get(loginVerifierRedirect.String())
 		require.NoError(t, err)
-		defer loginVerifierRes.Body.Close()
+		defer loginVerifierRes.Body.Close() //nolint:errcheck
 
 		setCookieHeader := loginVerifierRes.Header.Get("set-cookie")
 		assert.NotNil(t, setCookieHeader)
@@ -743,6 +743,21 @@ func TestStrategyLoginConsentNext(t *testing.T) {
 		_, res := makeOAuth2Request(t, reg, hc, c, url.Values{})
 		assert.EqualValues(t, http.StatusBadRequest, res.StatusCode)
 		assert.Empty(t, res.Request.URL.Query().Get("code"))
+	})
+
+	t.Run("case=should forward the identity schema in the login URL", func(t *testing.T) {
+		c := createDefaultClient(t)
+		hc := testhelpers.NewEmptyJarClient(t)
+
+		testhelpers.NewLoginConsentUI(t, reg.Config(),
+			func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "custom-id-schema", r.URL.Query().Get("identity_schema"))
+				w.WriteHeader(http.StatusBadRequest) // We do not want to continue the flow here, we just want to check the query parameter
+			},
+			testhelpers.HTTPServerNoExpectedCallHandler(t))
+
+		_, res := makeOAuth2Request(t, reg, hc, c, url.Values{"identity_schema": {"custom-id-schema"}})
+		assert.EqualValues(t, http.StatusBadRequest, res.StatusCode)
 	})
 
 	t.Run("case=should require re-authentication when parameters mandate it", func(t *testing.T) {
@@ -950,7 +965,7 @@ func TestStrategyLoginConsentNext(t *testing.T) {
 				assert.EqualValues(t, hash, uiClaims.Get("sub").String())
 
 				// Access token data must not be obfuscated
-				atClaims := testhelpers.IntrospectToken(t, conf, token.AccessToken, adminTS)
+				atClaims := testhelpers.IntrospectToken(t, token.AccessToken, adminTS)
 				assert.EqualValues(t, subject, atClaims.Get("sub").String())
 			})
 		}
@@ -986,7 +1001,7 @@ func TestStrategyLoginConsentNext(t *testing.T) {
 		assert.EqualValues(t, obfuscated, uiClaims.Get("sub").String())
 
 		// Access token data must not be obfuscated
-		atClaims := testhelpers.IntrospectToken(t, conf, token.AccessToken, adminTS)
+		atClaims := testhelpers.IntrospectToken(t, token.AccessToken, adminTS)
 		assert.EqualValues(t, subject, atClaims.Get("sub").String())
 	})
 
@@ -1105,6 +1120,226 @@ func TestStrategyLoginConsentNext(t *testing.T) {
 
 		hc := testhelpers.NewEmptyJarClient(t)
 		makeRequestAndExpectCode(t, hc, c, url.Values{"redirect_uri": {c.RedirectURIs[0]}})
+	})
+}
+
+func TestStrategyDeviceLoginConsent(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	reg := testhelpers.NewRegistryMemory(t)
+	reg.Config().MustSet(ctx, config.KeyAccessTokenStrategy, "opaque")
+	reg.Config().MustSet(ctx, config.KeyConsentRequestMaxAge, time.Hour)
+	reg.Config().MustSet(ctx, config.KeyConsentRequestMaxAge, time.Hour)
+	reg.Config().MustSet(ctx, config.KeyScopeStrategy, "exact")
+	reg.Config().MustSet(ctx, config.KeySubjectTypesSupported, []string{"pairwise", "public"})
+	reg.Config().MustSet(ctx, config.KeySubjectIdentifierAlgorithmSalt, "76d5d2bf-747f-4592-9fbd-d2b895a54b3a")
+
+	publicTS, adminTS := testhelpers.NewOAuth2Server(ctx, t, reg)
+	adminClient := hydra.NewAPIClient(hydra.NewConfiguration())
+	adminClient.GetConfig().Servers = hydra.ServerConfigurations{{URL: adminTS.URL}}
+
+	oauth2Config := func(t *testing.T, c *client.Client) *oauth2.Config {
+		return &oauth2.Config{
+			ClientID:     c.GetID(),
+			ClientSecret: c.Secret,
+			Endpoint: oauth2.Endpoint{
+				DeviceAuthURL: publicTS.URL + "/oauth2/device/auth",
+				TokenURL:      publicTS.URL + "/oauth2/token",
+				AuthStyle:     oauth2.AuthStyleInHeader,
+			},
+		}
+	}
+
+	now := 1723546027 // Unix timestamps must round-trip through Hydra without converting to floats or similar
+	acceptDeviceHandler := func(t *testing.T) http.HandlerFunc {
+		return checkAndAcceptDeviceHandler(t, adminClient)
+	}
+
+	acceptLoginHandler := func(t *testing.T, subject string, payload *hydra.AcceptOAuth2LoginRequest) http.HandlerFunc {
+		return checkAndAcceptLoginHandler(t, adminClient, subject, func(*testing.T, *hydra.OAuth2LoginRequest, error) hydra.AcceptOAuth2LoginRequest {
+			if payload == nil {
+				return hydra.AcceptOAuth2LoginRequest{}
+			}
+			return *payload
+		})
+	}
+
+	acceptConsentHandler := func(t *testing.T, payload *hydra.AcceptOAuth2ConsentRequest) http.HandlerFunc {
+		return checkAndAcceptConsentHandler(t, adminClient, func(*testing.T, *hydra.OAuth2ConsentRequest, error) hydra.AcceptOAuth2ConsentRequest {
+			if payload == nil {
+				return hydra.AcceptOAuth2ConsentRequest{}
+			}
+			return *payload
+		})
+	}
+
+	createDefaultClient := func(t *testing.T) *client.Client {
+		c := &client.Client{GrantTypes: []string{"urn:ietf:params:oauth:grant-type:device_code"}}
+		return createClient(t, reg, c)
+	}
+	t.Run("case=should pass if both login and consent are granted and check remember flows as well as various payloads", func(t *testing.T) {
+		subject := "aeneas-rekkas"
+		c := createDefaultClient(t)
+		testhelpers.NewDeviceLoginConsentUI(t, reg.Config(),
+			acceptDeviceHandler(t),
+			acceptLoginHandler(t, subject, &hydra.AcceptOAuth2LoginRequest{
+				Remember: pointerx.Bool(true),
+			}),
+			acceptConsentHandler(t, &hydra.AcceptOAuth2ConsentRequest{
+				Remember:   pointerx.Bool(true),
+				GrantScope: []string{"openid"},
+				Session: &hydra.AcceptOAuth2ConsentRequestSession{
+					AccessToken: map[string]interface{}{
+						"foo": "bar",
+						"ts1": now,
+					},
+					IdToken: map[string]interface{}{
+						"bar": "baz",
+						"ts1": now,
+					},
+				},
+			}))
+
+		hc := testhelpers.NewEmptyJarClient(t)
+
+		var sid string
+		var run = func(t *testing.T) {
+			res, resp := makeOAuth2DeviceAuthRequest(t, reg, hc, c, "openid")
+			assert.EqualValues(t, http.StatusOK, resp.StatusCode)
+
+			devResp := new(oauth2.DeviceAuthResponse)
+			require.NoError(t, json.Unmarshal([]byte(res.Raw), devResp))
+
+			resp, err := hc.Get(devResp.VerificationURIComplete)
+			require.NoError(t, err)
+			require.Contains(t, reg.Config().DeviceDoneURL(ctx).String(), resp.Request.URL.Path, "did not end up in post device URL")
+			require.Equal(t, resp.Request.URL.Query().Get("client_id"), c.ID)
+
+			conf := oauth2Config(t, c)
+			token, err := conf.DeviceAccessToken(ctx, devResp)
+			require.NoError(t, err)
+
+			claims := testhelpers.IntrospectToken(t, token.AccessToken, adminTS)
+			assert.Equal(t, "bar", claims.Get("ext.foo").String(), "%s", claims.Raw)
+
+			idClaims := testhelpers.DecodeIDToken(t, token)
+			assert.Equal(t, "baz", idClaims.Get("bar").String(), "%s", idClaims.Raw)
+			sid = idClaims.Get("sid").String()
+			assert.NotNil(t, sid)
+		}
+
+		t.Run("perform first flow", run)
+
+		t.Run("perform follow up flows and check if session values are set", func(t *testing.T) {
+			testhelpers.NewLoginConsentUI(t, reg.Config(),
+				checkAndAcceptLoginHandler(t, adminClient, subject, func(t *testing.T, res *hydra.OAuth2LoginRequest, err error) hydra.AcceptOAuth2LoginRequest {
+					require.NoError(t, err)
+					assert.True(t, res.Skip)
+					assert.Equal(t, sid, *res.SessionId)
+					assert.Equal(t, subject, res.Subject)
+					assert.Empty(t, pointerx.StringR(res.Client.ClientSecret))
+					return hydra.AcceptOAuth2LoginRequest{
+						Subject: subject,
+						Context: map[string]interface{}{"xyz": "abc"},
+					}
+				}),
+				checkAndAcceptConsentHandler(t, adminClient, func(t *testing.T, req *hydra.OAuth2ConsentRequest, err error) hydra.AcceptOAuth2ConsentRequest {
+					require.NoError(t, err)
+					assert.True(t, *req.Skip)
+					assert.Equal(t, sid, *req.LoginSessionId)
+					assert.Equal(t, subject, *req.Subject)
+					assert.Empty(t, pointerx.StringR(req.Client.ClientSecret))
+					assert.Equal(t, map[string]interface{}{"xyz": "abc"}, req.Context)
+					return hydra.AcceptOAuth2ConsentRequest{
+						Remember:   pointerx.Bool(true),
+						GrantScope: []string{"openid"},
+						Session: &hydra.AcceptOAuth2ConsentRequestSession{
+							AccessToken: map[string]interface{}{
+								"foo": "bar",
+								"ts1": now,
+							},
+							IdToken: map[string]interface{}{
+								"bar": "baz",
+								"ts2": now,
+							},
+						},
+					}
+				}))
+
+			for k := 0; k < 3; k++ {
+				t.Run(fmt.Sprintf("case=%d", k), run)
+			}
+		})
+	})
+	t.Run("case=should fail because we are reusing the same verifier", func(t *testing.T) {
+		subject := "aeneas-rekkas"
+		c := createDefaultClient(t)
+		testhelpers.NewDeviceLoginConsentUI(t, reg.Config(),
+			acceptDeviceHandler(t),
+			acceptLoginHandler(t, subject, &hydra.AcceptOAuth2LoginRequest{
+				Remember: pointerx.Bool(true),
+			}),
+			acceptConsentHandler(t, &hydra.AcceptOAuth2ConsentRequest{
+				Remember:   pointerx.Bool(true),
+				GrantScope: []string{"openid"},
+				Session: &hydra.AcceptOAuth2ConsentRequestSession{
+					AccessToken: map[string]interface{}{"foo": "bar"},
+					IdToken:     map[string]interface{}{"bar": "baz"},
+				},
+			}))
+
+		hc := testhelpers.NewEmptyJarClient(t)
+
+		res, resp := makeOAuth2DeviceAuthRequest(t, reg, hc, c, "openid")
+		assert.EqualValues(t, http.StatusOK, resp.StatusCode)
+
+		devResp := new(oauth2.DeviceAuthResponse)
+		require.NoError(t, json.Unmarshal([]byte(res.Raw), devResp))
+
+		resp, err := hc.Get(devResp.VerificationURIComplete)
+		require.NoError(t, err)
+		require.Contains(t, reg.Config().DeviceDoneURL(ctx).String(), resp.Request.URL.Path, "did not end up in post device URL")
+		require.Equal(t, resp.Request.URL.Query().Get("client_id"), c.ID)
+
+		conf := oauth2Config(t, c)
+		token, err := conf.DeviceAccessToken(ctx, devResp)
+		require.NoError(t, err)
+
+		claims := testhelpers.IntrospectToken(t, token.AccessToken, adminTS)
+		assert.Equal(t, "bar", claims.Get("ext.foo").String(), "%s", claims.Raw)
+
+		idClaims := testhelpers.DecodeIDToken(t, token)
+		assert.Equal(t, "baz", idClaims.Get("bar").String(), "%s", idClaims.Raw)
+		sid := idClaims.Get("sid").String()
+		assert.NotNil(t, sid)
+
+	})
+	t.Run("case=should fail because a device verifier was given that doesn't exist in the store", func(t *testing.T) {
+		testhelpers.NewDeviceLoginConsentUI(t, reg.Config(), testhelpers.HTTPServerNoExpectedCallHandler(t), testhelpers.HTTPServerNoExpectedCallHandler(t), testhelpers.HTTPServerNoExpectedCallHandler(t))
+		c := createDefaultClient(t)
+		hc := testhelpers.NewEmptyJarClient(t)
+
+		_, res := makeOAuth2DeviceVerificationRequest(t, reg, hc, c, url.Values{"device_verifier": {"does-not-exist"}})
+		assert.EqualValues(t, http.StatusForbidden, res.StatusCode)
+	})
+
+	t.Run("case=should fail because a login verifier was given that doesn't exist in the store", func(t *testing.T) {
+		testhelpers.NewLoginConsentUI(t, reg.Config(), testhelpers.HTTPServerNoExpectedCallHandler(t), testhelpers.HTTPServerNoExpectedCallHandler(t))
+		c := createDefaultClient(t)
+		hc := testhelpers.NewEmptyJarClient(t)
+
+		_, res := makeOAuth2DeviceVerificationRequest(t, reg, hc, c, url.Values{"login_verifier": {"does-not-exist"}})
+		assert.EqualValues(t, http.StatusForbidden, res.StatusCode)
+	})
+
+	t.Run("case=should fail because a consent verifier was given that doesn't exist in the store", func(t *testing.T) {
+		testhelpers.NewLoginConsentUI(t, reg.Config(), testhelpers.HTTPServerNoExpectedCallHandler(t), testhelpers.HTTPServerNoExpectedCallHandler(t))
+		c := createDefaultClient(t)
+		hc := testhelpers.NewEmptyJarClient(t)
+
+		_, res := makeOAuth2DeviceVerificationRequest(t, reg, hc, c, url.Values{"consent_verifier": {"does-not-exist"}})
+		assert.EqualValues(t, http.StatusForbidden, res.StatusCode)
 	})
 }
 

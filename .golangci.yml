@@ -1,16 +1,21 @@
+version: "2"
+
 linters:
   enable:
     - gosec
     - errcheck
-    - gosimple
-    - bodyclose
-    - staticcheck
-    - goimports
-  disable:
     - ineffassign
+    - staticcheck
     - unused
-
-issues:
-  exclude-files:
-    - ".+_test.go"
-    - ".+_test_.+.go"
+  settings:
+    staticcheck:
+      checks:
+        - "-SA1019"
+  exclusions:
+    rules:
+      - path: '_test\.go'
+        linters:
+          - gosec
+      - path: "internal/httpclient"
+        linters:
+          - errcheck

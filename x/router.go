@@ -4,24 +4,19 @@
 package x
 
 import (
-	"context"
-	"net/url"
-
-	"github.com/julienschmidt/httprouter"
-
 	"github.com/ory/x/httprouterx"
-
+	"github.com/ory/x/prometheusx"
 	"github.com/ory/x/serverx"
 )
 
-func NewRouterPublic() *httprouterx.RouterPublic {
-	router := httprouter.New()
-	router.NotFound = serverx.DefaultNotFoundHandler
-	return httprouterx.NewRouterPublic()
+func NewRouterPublic(metricsHandler *prometheusx.MetricsManager) *httprouterx.RouterPublic {
+	router := httprouterx.NewRouterPublic(metricsHandler)
+	router.Handler("", "/", serverx.DefaultNotFoundHandler)
+	return router
 }
 
-func NewRouterAdmin(f func(context.Context) *url.URL) *httprouterx.RouterAdmin {
-	router := httprouterx.NewRouterAdminWithPrefix("/admin", f)
-	router.NotFound = serverx.DefaultNotFoundHandler
+func NewRouterAdmin(metricsHandler *prometheusx.MetricsManager) *httprouterx.RouterAdmin {
+	router := httprouterx.NewRouterAdminWithPrefix(metricsHandler)
+	router.Handler("", "/", serverx.DefaultNotFoundHandler)
 	return router
 }

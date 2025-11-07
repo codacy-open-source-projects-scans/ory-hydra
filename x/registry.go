@@ -6,15 +6,14 @@ package x
 import (
 	"context"
 
+	"github.com/gofrs/uuid"
+	"github.com/gorilla/sessions"
 	"github.com/hashicorp/go-retryablehttp"
 
-	"github.com/ory/x/httpx"
-	"github.com/ory/x/otelx"
-
-	"github.com/gorilla/sessions"
-
 	"github.com/ory/herodot"
+	"github.com/ory/x/httpx"
 	"github.com/ory/x/logrusx"
+	"github.com/ory/x/otelx"
 )
 
 type RegistryLogger interface {
@@ -36,4 +35,16 @@ type TracingProvider interface {
 
 type HTTPClientProvider interface {
 	HTTPClient(ctx context.Context, opts ...httpx.ResilientOptions) *retryablehttp.Client
+}
+
+type Networker interface {
+	NetworkID(ctx context.Context) uuid.UUID
+}
+
+type NetworkProvider interface {
+	Networker() Networker
+}
+
+type Transactor interface {
+	Transaction(ctx context.Context, f func(ctx context.Context) error) error
 }

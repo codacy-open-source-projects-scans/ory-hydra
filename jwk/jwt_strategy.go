@@ -7,17 +7,12 @@ import (
 	"context"
 	"net"
 
-	"github.com/ory/x/josex"
-
 	"github.com/go-jose/go-jose/v3"
-	"github.com/gofrs/uuid"
-
-	"github.com/ory/fosite"
-	"github.com/ory/hydra/v2/driver/config"
-
 	"github.com/pkg/errors"
 
-	"github.com/ory/fosite/token/jwt"
+	"github.com/ory/hydra/v2/fosite"
+	"github.com/ory/hydra/v2/fosite/token/jwt"
+	"github.com/ory/x/josex"
 )
 
 type JWTSigner interface {
@@ -29,18 +24,17 @@ type JWTSigner interface {
 type DefaultJWTSigner struct {
 	*jwt.DefaultSigner
 	r     InternalRegistry
-	c     *config.DefaultProvider
 	setID string
 }
 
-func NewDefaultJWTSigner(c *config.DefaultProvider, r InternalRegistry, setID string) *DefaultJWTSigner {
-	j := &DefaultJWTSigner{c: c, r: r, setID: setID, DefaultSigner: &jwt.DefaultSigner{}}
+func NewDefaultJWTSigner(r InternalRegistry, setID string) *DefaultJWTSigner {
+	j := &DefaultJWTSigner{r: r, setID: setID, DefaultSigner: &jwt.DefaultSigner{}}
 	j.DefaultSigner.GetPrivateKey = j.getPrivateKey
 	return j
 }
 
 func (j *DefaultJWTSigner) getKeys(ctx context.Context) (private *jose.JSONWebKey, err error) {
-	private, err = GetOrGenerateKeys(ctx, j.r, j.r.KeyManager(), j.setID, uuid.Must(uuid.NewV4()).String(), string(jose.RS256))
+	private, err = GetOrGenerateKeys(ctx, j.r, j.r.KeyManager(), j.setID, string(jose.RS256))
 	if err == nil {
 		return private, nil
 	}

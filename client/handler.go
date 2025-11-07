@@ -9,20 +9,19 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
-	"github.com/julienschmidt/httprouter"
 	"github.com/pkg/errors"
 
-	"github.com/ory/fosite"
 	"github.com/ory/herodot"
+	"github.com/ory/hydra/v2/fosite"
 	"github.com/ory/hydra/v2/x"
-	"github.com/ory/x/errorsx"
 	"github.com/ory/x/httprouterx"
 	"github.com/ory/x/jsonx"
 	"github.com/ory/x/openapix"
-	"github.com/ory/x/pagination/tokenpagination"
+	keysetpagination "github.com/ory/x/pagination/keysetpagination_v2"
 	"github.com/ory/x/urlx"
 	"github.com/ory/x/uuidx"
 )
@@ -37,24 +36,24 @@ const (
 )
 
 func NewHandler(r InternalRegistry) *Handler {
-	return &Handler{
-		r: r,
-	}
+	return &Handler{r: r}
 }
 
-func (h *Handler) SetRoutes(admin *httprouterx.RouterAdmin, public *httprouterx.RouterPublic) {
-	admin.GET(ClientsHandlerPath, h.listOAuth2Clients)
-	admin.POST(ClientsHandlerPath, h.createOAuth2Client)
-	admin.GET(ClientsHandlerPath+"/:id", h.Get)
-	admin.PUT(ClientsHandlerPath+"/:id", h.setOAuth2Client)
-	admin.PATCH(ClientsHandlerPath+"/:id", h.patchOAuth2Client)
-	admin.DELETE(ClientsHandlerPath+"/:id", h.deleteOAuth2Client)
-	admin.PUT(ClientsHandlerPath+"/:id/lifespans", h.setOAuth2ClientLifespans)
+func (h *Handler) SetAdminRoutes(r *httprouterx.RouterAdmin) {
+	r.GET(ClientsHandlerPath, h.listOAuth2Clients)
+	r.POST(ClientsHandlerPath, h.createOAuth2Client)
+	r.GET(ClientsHandlerPath+"/{id}", h.Get)
+	r.PUT(ClientsHandlerPath+"/{id}", h.setOAuth2Client)
+	r.PATCH(ClientsHandlerPath+"/{id}", h.patchOAuth2Client)
+	r.DELETE(ClientsHandlerPath+"/{id}", h.deleteOAuth2Client)
+	r.PUT(ClientsHandlerPath+"/{id}/lifespans", h.setOAuth2ClientLifespans)
+}
 
-	public.POST(DynClientsHandlerPath, h.createOidcDynamicClient)
-	public.GET(DynClientsHandlerPath+"/:id", h.getOidcDynamicClient)
-	public.PUT(DynClientsHandlerPath+"/:id", h.setOidcDynamicClient)
-	public.DELETE(DynClientsHandlerPath+"/:id", h.deleteOidcDynamicClient)
+func (h *Handler) SetPublicRoutes(r *httprouterx.RouterPublic) {
+	r.POST(DynClientsHandlerPath, h.createOidcDynamicClient)
+	r.GET(DynClientsHandlerPath+"/{id}", h.getOidcDynamicClient)
+	r.PUT(DynClientsHandlerPath+"/{id}", h.setOidcDynamicClient)
+	r.DELETE(DynClientsHandlerPath+"/{id}", h.deleteOidcDynamicClient)
 }
 
 // OAuth 2.0 Client Creation Parameters
@@ -89,14 +88,14 @@ type createOAuth2Client struct {
 //	  201: oAuth2Client
 //	  400: errorOAuth2BadRequest
 //	  default: errorOAuth2Default
-func (h *Handler) createOAuth2Client(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (h *Handler) createOAuth2Client(w http.ResponseWriter, r *http.Request) {
 	c, err := h.CreateClient(r, h.r.ClientValidator().Validate, false)
 	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
 
-	h.r.Writer().WriteCreated(w, r, "/admin"+ClientsHandlerPath+"/"+c.GetID(), &c)
+	h.r.Writer().WriteCreated(w, r, urlx.MustJoin("/admin", ClientsHandlerPath, url.PathEscape(c.GetID())), &c)
 }
 
 // OpenID Connect Dynamic Client Registration Parameters
@@ -140,29 +139,29 @@ type createOidcDynamicClient struct {
 //	  201: oAuth2Client
 //	  400: errorOAuth2BadRequest
 //	  default: errorOAuth2Default
-func (h *Handler) createOidcDynamicClient(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+func (h *Handler) createOidcDynamicClient(w http.ResponseWriter, r *http.Request) {
 	if err := h.requireDynamicAuth(r); err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
 	c, err := h.CreateClient(r, h.r.ClientValidator().ValidateDynamicRegistration, true)
 	if err != nil {
-		h.r.Writer().WriteError(w, r, errorsx.WithStack(err))
+		h.r.Writer().WriteError(w, r, errors.WithStack(err))
 		return
 	}
 
-	h.r.Writer().WriteCreated(w, r, "/admin"+ClientsHandlerPath+"/"+c.GetID(), &c)
+	h.r.Writer().WriteCreated(w, r, urlx.MustJoin("admin", ClientsHandlerPath, url.PathEscape(c.GetID())), &c)
 }
 
 func (h *Handler) CreateClient(r *http.Request, validator func(context.Context, *Client) error, isDynamic bool) (*Client, error) {
 	var c Client
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		return nil, errorsx.WithStack(herodot.ErrBadRequest.WithReasonf("Unable to decode the request body: %s", err))
+		return nil, errors.WithStack(herodot.ErrBadRequest.WithReasonf("Unable to decode the request body: %s", err))
 	}
 
 	if isDynamic {
 		if c.Secret != "" {
-			return nil, errorsx.WithStack(herodot.ErrBadRequest.WithReasonf("It is not allowed to choose your own OAuth2 Client secret."))
+			return nil, errors.WithStack(herodot.ErrBadRequest.WithReasonf("It is not allowed to choose your own OAuth2 Client secret."))
 		}
 		// We do not allow to set the client ID for dynamic clients.
 		c.ID = uuidx.NewV4().String()
@@ -184,14 +183,14 @@ func (h *Handler) CreateClient(r *http.Request, validator func(context.Context, 
 	c.CreatedAt = time.Now().UTC().Round(time.Second)
 	c.UpdatedAt = c.CreatedAt
 
-	token, signature, err := h.r.OAuth2HMACStrategy().GenerateAccessToken(r.Context(), nil)
+	token, signature, err := h.r.OAuth2HMACStrategy().AccessTokenStrategy().GenerateAccessToken(r.Context(), nil)
 	if err != nil {
 		return nil, err
 	}
 
 	c.RegistrationAccessToken = token
 	c.RegistrationAccessTokenSignature = signature
-	c.RegistrationClientURI = urlx.AppendPaths(h.r.Config().PublicURL(r.Context()), DynClientsHandlerPath+"/"+c.GetID()).String()
+	c.RegistrationClientURI = urlx.AppendPaths(h.r.Config().PublicURL(r.Context()), DynClientsHandlerPath, url.PathEscape(c.GetID())).String()
 
 	if err := h.r.ClientManager().CreateClient(r.Context(), &c); err != nil {
 		return nil, err
@@ -247,14 +246,14 @@ type setOAuth2Client struct {
 //	  400: errorOAuth2BadRequest
 //	  404: errorOAuth2NotFound
 //	  default: errorOAuth2Default
-func (h *Handler) setOAuth2Client(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+func (h *Handler) setOAuth2Client(w http.ResponseWriter, r *http.Request) {
 	var c Client
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		h.r.Writer().WriteError(w, r, errorsx.WithStack(herodot.ErrBadRequest.WithReasonf("Unable to decode the request body: %s", err)))
+		h.r.Writer().WriteError(w, r, errors.WithStack(herodot.ErrBadRequest.WithReasonf("Unable to decode the request body: %s", err)))
 		return
 	}
 
-	c.ID = ps.ByName("id")
+	c.ID = r.PathValue("id")
 	if err := h.updateClient(r.Context(), &c, h.r.ClientValidator().Validate); err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
@@ -335,13 +334,13 @@ type setOidcDynamicClient struct {
 //	  200: oAuth2Client
 //	  404: errorOAuth2NotFound
 //	  default: errorOAuth2Default
-func (h *Handler) setOidcDynamicClient(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+func (h *Handler) setOidcDynamicClient(w http.ResponseWriter, r *http.Request) {
 	if err := h.requireDynamicAuth(r); err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
 
-	client, err := h.ValidDynamicAuth(r, ps)
+	client, err := h.ValidDynamicAuth(r, r.PathValue("id"))
 	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
@@ -349,17 +348,17 @@ func (h *Handler) setOidcDynamicClient(w http.ResponseWriter, r *http.Request, p
 
 	var c Client
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		h.r.Writer().WriteError(w, r, errorsx.WithStack(herodot.ErrBadRequest.WithReasonf("Unable to decode the request body. Is it valid JSON?").WithDebug(err.Error())))
+		h.r.Writer().WriteError(w, r, errors.WithStack(herodot.ErrBadRequest.WithReasonf("Unable to decode the request body. Is it valid JSON?").WithDebug(err.Error())))
 		return
 	}
 
 	if c.Secret != "" {
-		h.r.Writer().WriteError(w, r, errorsx.WithStack(herodot.ErrForbidden.WithReasonf("It is not allowed to choose your own OAuth2 Client secret.")))
+		h.r.Writer().WriteError(w, r, errors.WithStack(herodot.ErrForbidden.WithReasonf("It is not allowed to choose your own OAuth2 Client secret.")))
 		return
 	}
 
 	// Regenerate the registration access token
-	token, signature, err := h.r.OAuth2HMACStrategy().GenerateAccessToken(r.Context(), nil)
+	token, signature, err := h.r.OAuth2HMACStrategy().AccessTokenStrategy().GenerateAccessToken(r.Context(), nil)
 	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
@@ -418,23 +417,24 @@ type patchOAuth2Client struct {
 //	  200: oAuth2Client
 //	  404: errorOAuth2NotFound
 //	  default: errorOAuth2Default
-func (h *Handler) patchOAuth2Client(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+func (h *Handler) patchOAuth2Client(w http.ResponseWriter, r *http.Request) {
 	patchJSON, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
 
-	id := ps.ByName("id")
-	c, err := h.r.ClientManager().GetConcreteClient(r.Context(), id)
+	id := r.PathValue("id")
+	client, err := h.r.ClientManager().GetConcreteClient(r.Context(), id)
 	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
 
-	oldSecret := c.Secret
+	oldSecret := client.Secret
 
-	if err := jsonx.ApplyJSONPatch(patchJSON, c, "/id"); err != nil {
+	client, err = jsonx.ApplyJSONPatch(patchJSON, client, "/id")
+	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
@@ -443,16 +443,16 @@ func (h *Handler) patchOAuth2Client(w http.ResponseWriter, r *http.Request, ps h
 	// GetConcreteClient returns a client with the hashed secret, however updateClient expects
 	// an empty secret if the secret hasn't changed. As such we need to check if the patch has
 	// updated the secret or not
-	if oldSecret == c.Secret {
-		c.Secret = ""
+	if oldSecret == client.Secret {
+		client.Secret = ""
 	}
 
-	if err := h.updateClient(r.Context(), c, h.r.ClientValidator().Validate); err != nil {
+	if err := h.updateClient(r.Context(), client, h.r.ClientValidator().Validate); err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
 
-	h.r.Writer().Write(w, r, c)
+	h.r.Writer().Write(w, r, client)
 }
 
 // Paginated OAuth2 Client List Response
@@ -461,7 +461,7 @@ func (h *Handler) patchOAuth2Client(w http.ResponseWriter, r *http.Request, ps h
 //
 //lint:ignore U1000 Used to generate Swagger and OpenAPI definitions
 type listOAuth2ClientsResponse struct {
-	tokenpagination.ResponseHeaders
+	keysetpagination.ResponseHeaders
 
 	// List of OAuth 2.0 Clients
 	//
@@ -475,7 +475,7 @@ type listOAuth2ClientsResponse struct {
 //
 //lint:ignore U1000 Used to generate Swagger and OpenAPI definitions
 type listOAuth2ClientsParameters struct {
-	tokenpagination.RequestParameters
+	keysetpagination.RequestParameters
 
 	// The name of the clients to filter by.
 	//
@@ -506,16 +506,20 @@ type listOAuth2ClientsParameters struct {
 //	Responses:
 //	  200: listOAuth2Clients
 //	  default: errorOAuth2Default
-func (h *Handler) listOAuth2Clients(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	page, itemsPerPage := x.ParsePagination(r)
+func (h *Handler) listOAuth2Clients(w http.ResponseWriter, r *http.Request) {
+	pageKeys := h.r.Config().GetPaginationEncryptionKeys(r.Context())
+	pagination, err := keysetpagination.ParseQueryParams(pageKeys, r.URL.Query())
+	if err != nil {
+		h.r.Writer().WriteError(w, r, errors.WithStack(herodot.ErrBadRequest.WithReasonf("Unable to parse pagination parameters: %s", err)))
+		return
+	}
 	filters := Filter{
-		Limit:  itemsPerPage,
-		Offset: page * itemsPerPage,
-		Name:   r.URL.Query().Get("client_name"),
-		Owner:  r.URL.Query().Get("owner"),
+		PageOpts: pagination,
+		Name:     r.URL.Query().Get("client_name"),
+		Owner:    r.URL.Query().Get("owner"),
 	}
 
-	c, err := h.r.ClientManager().GetClients(r.Context(), filters)
+	c, nextPage, err := h.r.ClientManager().GetClients(r.Context(), filters)
 	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
@@ -529,13 +533,7 @@ func (h *Handler) listOAuth2Clients(w http.ResponseWriter, r *http.Request, ps h
 		c[k].Secret = ""
 	}
 
-	total, err := h.r.ClientManager().CountClients(r.Context())
-	if err != nil {
-		h.r.Writer().WriteError(w, r, err)
-		return
-	}
-
-	x.PaginationHeader(w, r.URL, int64(total), page, itemsPerPage)
+	keysetpagination.SetLinkHeader(w, pageKeys, r.URL, nextPage)
 	h.r.Writer().Write(w, r, c)
 }
 
@@ -572,8 +570,8 @@ type adminGetOAuth2Client struct {
 //	Responses:
 //	  200: oAuth2Client
 //	  default: errorOAuth2Default
-func (h *Handler) Get(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	var id = ps.ByName("id")
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
 	c, err := h.r.ClientManager().GetConcreteClient(r.Context(), id)
 	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
@@ -623,13 +621,13 @@ type getOidcDynamicClient struct {
 //	Responses:
 //	  200: oAuth2Client
 //	  default: errorOAuth2Default
-func (h *Handler) getOidcDynamicClient(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+func (h *Handler) getOidcDynamicClient(w http.ResponseWriter, r *http.Request) {
 	if err := h.requireDynamicAuth(r); err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
 
-	client, err := h.ValidDynamicAuth(r, ps)
+	client, err := h.ValidDynamicAuth(r, r.PathValue("id"))
 	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
@@ -682,8 +680,8 @@ type deleteOAuth2Client struct {
 //	Responses:
 //	  204: emptyResponse
 //	  default: genericError
-func (h *Handler) deleteOAuth2Client(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	var id = ps.ByName("id")
+func (h *Handler) deleteOAuth2Client(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
 	if err := h.r.ClientManager().DeleteClient(r.Context(), id); err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
@@ -722,8 +720,8 @@ type setOAuth2ClientLifespans struct {
 //	Responses:
 //	  200: oAuth2Client
 //	  default: genericError
-func (h *Handler) setOAuth2ClientLifespans(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	var id = ps.ByName("id")
+func (h *Handler) setOAuth2ClientLifespans(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
 	c, err := h.r.ClientManager().GetConcreteClient(r.Context(), id)
 	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
@@ -732,7 +730,7 @@ func (h *Handler) setOAuth2ClientLifespans(w http.ResponseWriter, r *http.Reques
 
 	var ls Lifespans
 	if err := json.NewDecoder(r.Body).Decode(&ls); err != nil {
-		h.r.Writer().WriteError(w, r, errorsx.WithStack(herodot.ErrBadRequest.WithReasonf("Unable to decode the request body: %s", err)))
+		h.r.Writer().WriteError(w, r, errors.WithStack(herodot.ErrBadRequest.WithReasonf("Unable to decode the request body: %s", err)))
 		return
 	}
 
@@ -785,12 +783,12 @@ type dynamicClientRegistrationDeleteOAuth2Client struct {
 //	Responses:
 //	  204: emptyResponse
 //	  default: genericError
-func (h *Handler) deleteOidcDynamicClient(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+func (h *Handler) deleteOidcDynamicClient(w http.ResponseWriter, r *http.Request) {
 	if err := h.requireDynamicAuth(r); err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
-	client, err := h.ValidDynamicAuth(r, ps)
+	client, err := h.ValidDynamicAuth(r, r.PathValue("id"))
 	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
@@ -804,8 +802,8 @@ func (h *Handler) deleteOidcDynamicClient(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) ValidDynamicAuth(r *http.Request, ps httprouter.Params) (fosite.Client, error) {
-	c, err := h.r.ClientManager().GetConcreteClient(r.Context(), ps.ByName("id"))
+func (h *Handler) ValidDynamicAuth(r *http.Request, id string) (fosite.Client, error) {
+	c, err := h.r.ClientManager().GetConcreteClient(r.Context(), id)
 	if err != nil {
 		return nil, herodot.ErrUnauthorized.
 			WithTrace(err).
@@ -818,7 +816,7 @@ func (h *Handler) ValidDynamicAuth(r *http.Request, ps httprouter.Params) (fosit
 	}
 
 	token := strings.TrimPrefix(fosite.AccessTokenFromRequest(r), "ory_at_")
-	if err := h.r.OAuth2HMACStrategy().ValidateAccessToken(
+	if err := h.r.OAuth2HMACStrategy().AccessTokenStrategy().ValidateAccessToken(
 		r.Context(),
 		// The strategy checks the expiry time of the token. Registration tokens don't expire (we don't have a way of
 		// rotating them) so we set the expiry time to a time in the future.

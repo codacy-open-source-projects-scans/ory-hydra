@@ -6,9 +6,9 @@ package consent
 import (
 	"context"
 
-	"github.com/ory/fosite/handler/openid"
 	"github.com/ory/hydra/v2/aead"
 	"github.com/ory/hydra/v2/client"
+	"github.com/ory/hydra/v2/fosite/handler/openid"
 	"github.com/ory/hydra/v2/internal/kratos"
 	"github.com/ory/hydra/v2/x"
 )
@@ -18,6 +18,8 @@ type InternalRegistry interface {
 	x.RegistryCookieStore
 	x.RegistryLogger
 	x.HTTPClientProvider
+	x.TracingProvider
+	x.NetworkProvider
 	kratos.Provider
 	Registry
 	client.Registry
@@ -28,7 +30,11 @@ type InternalRegistry interface {
 }
 
 type Registry interface {
-	ConsentManager() Manager
+	ManagerProvider
+	ObfuscatedSubjectManagerProvider
+	LoginManagerProvider
+	LogoutManagerProvider
+
 	ConsentStrategy() Strategy
 	SubjectIdentifierAlgorithm(ctx context.Context) map[string]SubjectIdentifierAlgorithm
 }

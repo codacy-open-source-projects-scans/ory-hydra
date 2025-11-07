@@ -103,7 +103,7 @@
         "operationId": "listOAuth2Clients",
         "parameters": [
           {
-            "maximum": 500,
+            "maximum": 1000,
             "minimum": 1,
             "type": "integer",
             "format": "int64",
@@ -113,9 +113,7 @@
             "in": "query"
           },
           {
-            "minimum": 1,
             "type": "string",
-            "default": "1",
             "description": "Next Page Token\n\nThe next page token.\nFor details on pagination please head over to the [pagination documentation](https://www.ory.sh/docs/ecosystem/api-design#pagination).",
             "name": "page_token",
             "in": "query"
@@ -891,6 +889,55 @@
         }
       }
     },
+    "/admin/oauth2/auth/requests/device/accept": {
+      "put": {
+        "description": "Accepts a device grant user_code request",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "schemes": [
+          "http",
+          "https"
+        ],
+        "tags": [
+          "oAuth2"
+        ],
+        "summary": "Accepts a device grant user_code request",
+        "operationId": "acceptUserCodeRequest",
+        "parameters": [
+          {
+            "type": "string",
+            "name": "device_challenge",
+            "in": "query",
+            "required": true
+          },
+          {
+            "name": "Body",
+            "in": "body",
+            "schema": {
+              "$ref": "#/definitions/acceptDeviceUserCodeRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "oAuth2RedirectTo",
+            "schema": {
+              "$ref": "#/definitions/oAuth2RedirectTo"
+            }
+          },
+          "default": {
+            "description": "errorOAuth2",
+            "schema": {
+              "$ref": "#/definitions/errorOAuth2"
+            }
+          }
+        }
+      }
+    },
     "/admin/oauth2/auth/requests/login": {
       "get": {
         "description": "When an authorization code, hybrid, or implicit OAuth 2.0 Flow is initiated, Ory asks the login provider\nto authenticate the subject and then tell the Ory OAuth2 Service about it.\n\nPer default, the login provider is Ory itself. You may use a different login provider which needs to be a web-app\nyou write and host, and it must be able to authenticate (\"show the subject a login screen\")\na subject (in OAuth2 the proper name for subject is \"resource owner\").\n\nThe authentication challenge is appended to the login provider URL to which the subject's user-agent (browser) is redirected to. The login\nprovider uses that challenge to fetch information on the OAuth2 request and then accept or reject the requested authentication process.",
@@ -1249,13 +1296,18 @@
             "type": "string",
             "description": "OAuth 2.0 Consent Subject\n\nThe subject whose consent sessions should be deleted.",
             "name": "subject",
-            "in": "query",
-            "required": true
+            "in": "query"
           },
           {
             "type": "string",
             "description": "OAuth 2.0 Client ID\n\nIf set, deletes only those consent sessions that have been granted to the specified OAuth 2.0 Client ID.",
             "name": "client",
+            "in": "query"
+          },
+          {
+            "type": "string",
+            "description": "Consent Request ID\n\nIf set, revoke all token chains derived from this particular consent request ID.",
+            "name": "consent_request_id",
             "in": "query"
           },
           {
@@ -1280,7 +1332,7 @@
     },
     "/admin/oauth2/auth/sessions/login": {
       "delete": {
-        "description": "This endpoint invalidates authentication sessions. After revoking the authentication session(s), the subject\nhas to re-authenticate at the Ory OAuth2 Provider. This endpoint does not invalidate any tokens.\n\nIf you send the subject in a query param, all authentication sessions that belong to that subject are revoked.\nNo OpenID Connect Front- or Back-channel logout is performed in this case.\n\nAlternatively, you can send a SessionID via `sid` query param, in which case, only the session that is connected\nto that SessionID is revoked. OpenID Connect Back-channel logout is performed in this case.",
+        "description": "This endpoint invalidates authentication sessions. After revoking the authentication session(s), the subject\nhas to re-authenticate at the Ory OAuth2 Provider. This endpoint does not invalidate any tokens.\n\nIf you send the subject in a query param, all authentication sessions that belong to that subject are revoked.\nNo OpenID Connect Front- or Back-channel logout is performed in this case.\n\nAlternatively, you can send a SessionID via `sid` query param, in which case, only the session that is connected\nto that SessionID is revoked. OpenID Connect Back-channel logout is performed in this case.\n\nWhen using Ory for the identity provider, the login provider will also invalidate the session cookie.",
         "consumes": [
           "application/json"
         ],
@@ -1429,15 +1481,19 @@
         "operationId": "listTrustedOAuth2JwtGrantIssuers",
         "parameters": [
           {
+            "maximum": 1000,
+            "minimum": 1,
             "type": "integer",
             "format": "int64",
-            "name": "MaxItems",
+            "default": 250,
+            "description": "Items per Page\n\nThis is the number of items per page to return.\nFor details on pagination please head over to the [pagination documentation](https://www.ory.sh/docs/ecosystem/api-design#pagination).",
+            "name": "page_size",
             "in": "query"
           },
           {
-            "type": "integer",
-            "format": "int64",
-            "name": "DefaultItems",
+            "type": "string",
+            "description": "Next Page Token\n\nThe next page token.\nFor details on pagination please head over to the [pagination documentation](https://www.ory.sh/docs/ecosystem/api-design#pagination).",
+            "name": "page_token",
             "in": "query"
           },
           {
@@ -1700,6 +1756,65 @@
         ],
         "summary": "OAuth 2.0 Authorize Endpoint",
         "operationId": "oAuth2Authorize",
+        "responses": {
+          "302": {
+            "$ref": "#/responses/emptyResponse"
+          },
+          "default": {
+            "description": "errorOAuth2",
+            "schema": {
+              "$ref": "#/definitions/errorOAuth2"
+            }
+          }
+        }
+      }
+    },
+    "/oauth2/device/auth": {
+      "post": {
+        "description": "This endpoint is not documented here because you should never use your own implementation to perform OAuth2 flows.\nOAuth2 is a very popular protocol and a library for your programming language will exist.\n\nTo learn more about this flow please refer to the specification: https://tools.ietf.org/html/rfc8628",
+        "consumes": [
+          "application/x-www-form-urlencoded"
+        ],
+        "schemes": [
+          "http",
+          "https"
+        ],
+        "tags": [
+          "oAuth2"
+        ],
+        "summary": "The OAuth 2.0 Device Authorize Endpoint",
+        "operationId": "oAuth2DeviceFlow",
+        "responses": {
+          "200": {
+            "description": "deviceAuthorization",
+            "schema": {
+              "$ref": "#/definitions/deviceAuthorization"
+            }
+          },
+          "default": {
+            "description": "errorOAuth2",
+            "schema": {
+              "$ref": "#/definitions/errorOAuth2"
+            }
+          }
+        }
+      }
+    },
+    "/oauth2/device/verify": {
+      "get": {
+        "description": "This is the device user verification endpoint. The user is redirected here when trying to log in using the device flow.",
+        "consumes": [
+          "application/x-www-form-urlencoded"
+        ],
+        "schemes": [
+          "http",
+          "https"
+        ],
+        "tags": [
+          "oAuth2"
+        ],
+        "summary": "OAuth 2.0 Device Verification Endpoint",
+        "operationId": "performOAuth2DeviceVerificationFlow",
         "responses": {
           "302": {
             "$ref": "#/responses/emptyResponse"
@@ -2119,6 +2234,35 @@
       }
     },
     "DefaultError": {},
+    "DeviceUserAuthRequest": {
+      "type": "object",
+      "title": "Contains information on an ongoing device grant request.",
+      "required": [
+        "challenge"
+      ],
+      "properties": {
+        "challenge": {
+          "description": "ID is the identifier (\"device challenge\") of the device grant request. It is used to\nidentify the session.",
+          "type": "string"
+        },
+        "client": {
+          "$ref": "#/definitions/oAuth2Client"
+        },
+        "handled_at": {
+          "$ref": "#/definitions/nullTime"
+        },
+        "request_url": {
+          "description": "RequestURL is the original Device Authorization URL requested.",
+          "type": "string"
+        },
+        "requested_access_token_audience": {
+          "$ref": "#/definitions/StringSliceJSONFormat"
+        },
+        "requested_scope": {
+          "$ref": "#/definitions/StringSliceJSONFormat"
+        }
+      }
+    },
     "JSONRawMessage": {
       "type": "object",
       "title": "JSONRawMessage represents a json.RawMessage that works well with JSON, SQL, and Swagger."
@@ -2169,6 +2313,15 @@
         }
       }
     },
+    "acceptDeviceUserCodeRequest": {
+      "description": "Contains information on an device verification",
+      "type": "object",
+      "properties": {
+        "user_code": {
+          "type": "string"
+        }
+      }
+    },
     "acceptOAuth2ConsentRequest": {
       "type": "object",
       "title": "The request payload used to accept a consent request.",
@@ -2181,9 +2334,6 @@
         },
         "grant_scope": {
           "$ref": "#/definitions/StringSliceJSONFormat"
-        },
-        "handled_at": {
-          "$ref": "#/definitions/nullTime"
         },
         "remember": {
           "description": "Remember, if set to true, tells ORY Hydra to remember this consent authorization and reuse it if the same\nclient asks the same user for the same, or a subset of, scope.",
@@ -2223,7 +2373,7 @@
       ],
       "properties": {
         "acr": {
-          "description": "ACR sets the Authentication AuthorizationContext Class Reference value for this authentication session. You can use it\nto express that, for example, a user authenticated using two factor authentication.",
+          "description": "ACR sets the Authentication AuthorizationContext Class Reference value for this authentication session. You can use it\nto express that, for example, a user authenticated using two-factor authentication.",
           "type": "string"
         },
         "amr": {
@@ -2245,7 +2395,7 @@
           "type": "string"
         },
         "remember": {
-          "description": "Remember, if set to true, tells ORY Hydra to remember this user by telling the user agent (browser) to store\na cookie with authentication data. If the same user performs another OAuth 2.0 Authorization Request, he/she\nwill not be asked to log in again.",
+          "description": "Remember, if set to true, tells Ory Hydra to remember this user by telling the user agent (browser) to store\na cookie with authentication data. If the same user performs another OAuth 2.0 Authorization Request, they\nwill not be asked to log in again.",
           "type": "boolean"
         },
         "remember_for": {
@@ -2311,6 +2461,45 @@
           "items": {
             "type": "string"
           }
+        }
+      }
+    },
+    "deviceAuthorization": {
+      "description": "# Ory's OAuth 2.0 Device Authorization API",
+      "type": "object",
+      "title": "OAuth2 Device Flow",
+      "properties": {
+        "device_code": {
+          "description": "The device verification code.",
+          "type": "string",
+          "example": "ory_dc_smldfksmdfkl.mslkmlkmlk"
+        },
+        "expires_in": {
+          "description": "The lifetime in seconds of the \"device_code\" and \"user_code\".",
+          "type": "integer",
+          "format": "int64",
+          "example": 16830
+        },
+        "interval": {
+          "description": "The minimum amount of time in seconds that the client\nSHOULD wait between polling requests to the token endpoint.  If no\nvalue is provided, clients MUST use 5 as the default.",
+          "type": "integer",
+          "format": "int64",
+          "example": 5
+        },
+        "user_code": {
+          "description": "The end-user verification code.",
+          "type": "string",
+          "example": "AAAAAA"
+        },
+        "verification_uri": {
+          "description": "The end-user verification URI on the authorization\nserver.  The URI should be short and easy to remember as end users\nwill be asked to manually type it into their user agent.",
+          "type": "string",
+          "example": "https://auth.ory.sh/tv"
+        },
+        "verification_uri_complete": {
+          "description": "A verification URI that includes the \"user_code\" (or\nother information with the same function as the \"user_code\"),\nwhich is designed for non-textual transmission.",
+          "type": "string",
+          "example": "https://auth.ory.sh/tv?user_code=AAAAAA"
         }
       }
     },
@@ -2621,6 +2810,36 @@
         }
       }
     },
+    "keysetPaginationRequestParameters": {
+      "description": "For details on pagination please head over to the [pagination documentation](https://www.ory.sh/docs/ecosystem/api-design#pagination).",
+      "type": "object",
+      "title": "Pagination Request Parameters",
+      "properties": {
+        "page_size": {
+          "description": "Items per Page\n\nThis is the number of items per page to return.\nFor details on pagination please head over to the [pagination documentation](https://www.ory.sh/docs/ecosystem/api-design#pagination).",
+          "type": "integer",
+          "format": "int64",
+          "default": 250,
+          "maximum": 1000,
+          "minimum": 1
+        },
+        "page_token": {
+          "description": "Next Page Token\n\nThe next page token.\nFor details on pagination please head over to the [pagination documentation](https://www.ory.sh/docs/ecosystem/api-design#pagination).",
+          "type": "string"
+        }
+      }
+    },
+    "keysetPaginationResponseHeaders": {
+      "description": "The `Link` HTTP header contains multiple links (`first`, `next`) formatted as:\n`\u003chttps://{project-slug}.projects.oryapis.com/admin/sessions?page_size=250\u0026page_token=\u003e; rel=\"first\"`\n\nFor details on pagination please head over to the [pagination documentation](https://www.ory.sh/docs/ecosystem/api-design#pagination).",
+      "type": "object",
+      "title": "Pagination Response Header",
+      "properties": {
+        "link": {
+          "description": "The Link HTTP Header\n\nThe `Link` header contains a comma-delimited list of links to the following pages:\n\nfirst: The first page of results.\nnext: The next page of results.\n\nPages are omitted if they do not exist. For example, if there is no next page, the `next` link is omitted. Examples:\n\n\u003c/admin/sessions?page_size=250\u0026page_token={last_item_uuid}; rel=\"first\",/admin/sessions?page_size=250\u0026page_token=\u003e; rel=\"next\"",
+          "type": "string"
+        }
+      }
+    },
     "nullTime": {
       "type": "string",
       "format": "date-time",
@@ -2632,7 +2851,7 @@
       "title": "OAuth 2.0 Client",
       "properties": {
         "access_token_strategy": {
-          "description": "OAuth 2.0 Access Token Strategy\n\nAccessTokenStrategy is the strategy used to generate access tokens.\nValid options are `jwt` and `opaque`. `jwt` is a bad idea, see https://www.ory.sh/docs/hydra/advanced#json-web-tokens\nSetting the stragegy here overrides the global setting in `strategies.access_token`.",
+          "description": "OAuth 2.0 Access Token Strategy\n\nAccessTokenStrategy is the strategy used to generate access tokens.\nValid options are `jwt` and `opaque`. `jwt` is a bad idea, see https://www.ory.sh/docs/oauth2-oidc/jwt-access-token\nSetting the strategy here overrides the global setting in `strategies.access_token`.",
           "type": "string"
         },
         "allowed_cors_origins": {
@@ -2689,6 +2908,15 @@
           "description": "OAuth 2.0 Client Creation Date\n\nCreatedAt returns the timestamp of the client's creation.",
           "type": "string",
           "format": "date-time"
+        },
+        "device_authorization_grant_access_token_lifespan": {
+          "$ref": "#/definitions/NullDuration"
+        },
+        "device_authorization_grant_id_token_lifespan": {
+          "$ref": "#/definitions/NullDuration"
+        },
+        "device_authorization_grant_refresh_token_lifespan": {
+          "$ref": "#/definitions/NullDuration"
         },
         "frontchannel_logout_session_required": {
           "description": "OpenID Connect Front-Channel Logout Session Required\n\nBoolean value specifying whether the RP requires that iss (issuer) and sid (session ID) query parameters be\nincluded to identify the RP session with the OP when the frontchannel_logout_uri is used.\nIf omitted, the default value is false.",
@@ -2827,6 +3055,15 @@
         "client_credentials_grant_access_token_lifespan": {
           "$ref": "#/definitions/NullDuration"
         },
+        "device_authorization_grant_access_token_lifespan": {
+          "$ref": "#/definitions/NullDuration"
+        },
+        "device_authorization_grant_id_token_lifespan": {
+          "$ref": "#/definitions/NullDuration"
+        },
+        "device_authorization_grant_refresh_token_lifespan": {
+          "$ref": "#/definitions/NullDuration"
+        },
         "implicit_grant_access_token_lifespan": {
           "$ref": "#/definitions/NullDuration"
         },
@@ -2862,11 +3099,15 @@
           "$ref": "#/definitions/StringSliceJSONFormat"
         },
         "challenge": {
-          "description": "ID is the identifier (\"authorization challenge\") of the consent authorization request. It is used to\nidentify the session.",
+          "description": "Challenge is used to retrieve/accept/deny the consent request.",
           "type": "string"
         },
         "client": {
           "$ref": "#/definitions/oAuth2Client"
+        },
+        "consent_request_id": {
+          "description": "ConsentRequestID is the ID of the consent request.",
+          "type": "string"
         },
         "context": {
           "$ref": "#/definitions/JSONRawMessage"
@@ -2943,6 +3184,10 @@
         "consent_request": {
           "$ref": "#/definitions/oAuth2ConsentRequest"
         },
+        "consent_request_id": {
+          "description": "ConsentRequestID is the identifier of the consent request that initiated this consent session.",
+          "type": "string"
+        },
         "context": {
           "$ref": "#/definitions/JSONRawMessage"
         },
@@ -2988,7 +3233,7 @@
       ],
       "properties": {
         "challenge": {
-          "description": "ID is the identifier (\"login challenge\") of the login request. It is used to\nidentify the session.",
+          "description": "ID is the identifier of the login request.",
           "type": "string"
         },
         "client": {
@@ -3026,7 +3271,7 @@
       "title": "Contains information about an ongoing logout request.",
       "properties": {
         "challenge": {
-          "description": "Challenge is the identifier (\"logout challenge\") of the logout authentication request. It is used to\nidentify the session.",
+          "description": "Challenge is the identifier of the logout authentication request.",
           "type": "string"
         },
         "client": {
@@ -3108,6 +3353,7 @@
       "required": [
         "issuer",
         "authorization_endpoint",
+        "device_authorization_endpoint",
         "token_endpoint",
         "jwks_uri",
         "subject_types_supported",
@@ -3158,6 +3404,11 @@
           "items": {
             "$ref": "#/definitions/credentialSupportedDraft00"
           }
+        },
+        "device_authorization_endpoint": {
+          "description": "OAuth 2.0 Device Authorization Endpoint URL",
+          "type": "string",
+          "example": "https://playground.ory.sh/ory-hydra/public/oauth2/device/oauth"
         },
         "end_session_endpoint": {
           "description": "OpenID Connect End-Session Endpoint\n\nURL at the OP to which an RP can perform a redirect to request that the End-User be logged out at the OP.",
@@ -3369,38 +3620,6 @@
         },
         "zoneinfo": {
           "description": "String from zoneinfo [zoneinfo] time zone database representing the End-User's time zone. For example, Europe/Paris or America/Los_Angeles.",
-          "type": "string"
-        }
-      }
-    },
-    "pagination": {
-      "type": "object",
-      "properties": {
-        "page_size": {
-          "description": "Items per page\n\nThis is the number of items per page to return.\nFor details on pagination please head over to the [pagination documentation](https://www.ory.sh/docs/ecosystem/api-design#pagination).",
-          "type": "integer",
-          "format": "int64",
-          "default": 250,
-          "maximum": 1000,
-          "minimum": 1
-        },
-        "page_token": {
-          "description": "Next Page Token\n\nThe next page token.\nFor details on pagination please head over to the [pagination documentation](https://www.ory.sh/docs/ecosystem/api-design#pagination).",
-          "type": "string",
-          "default": "1",
-          "minimum": 1
-        }
-      }
-    },
-    "paginationHeaders": {
-      "type": "object",
-      "properties": {
-        "link": {
-          "description": "The link header contains pagination links.\n\nFor details on pagination please head over to the [pagination documentation](https://www.ory.sh/docs/ecosystem/api-design#pagination).\n\nin: header",
-          "type": "string"
-        },
-        "x-total-count": {
-          "description": "The total number of clients.\n\nin: header",
           "type": "string"
         }
       }
@@ -3664,6 +3883,28 @@
         }
       }
     },
+    "verifyUserCodeRequest": {
+      "type": "object",
+      "title": "HandledDeviceUserAuthRequest is the request payload used to accept a device user_code.",
+      "properties": {
+        "client": {
+          "$ref": "#/definitions/oAuth2Client"
+        },
+        "device_code_request_id": {
+          "type": "string"
+        },
+        "request_url": {
+          "description": "RequestURL is the original Device Authorization URL requested.",
+          "type": "string"
+        },
+        "requested_access_token_audience": {
+          "$ref": "#/definitions/StringSliceJSONFormat"
+        },
+        "requested_scope": {
+          "$ref": "#/definitions/StringSliceJSONFormat"
+        }
+      }
+    },
     "version": {
       "type": "object",
       "properties": {
@@ -3707,12 +3948,7 @@
       "headers": {
         "link": {
           "type": "string",
-          "description": "The Link HTTP Header\n\nThe `Link` header contains a comma-delimited list of links to the following pages:\n\nfirst: The first page of results.\nnext: The next page of results.\nprev: The previous page of results.\nlast: The last page of results.\n\nPages are omitted if they do not exist. For example, if there is no next page, the `next` link is omitted. Examples:\n\n\u003c/clients?page_size=5\u0026page_token=0\u003e; rel=\"first\",\u003c/clients?page_size=5\u0026page_token=15\u003e; rel=\"next\",\u003c/clients?page_size=5\u0026page_token=5\u003e; rel=\"prev\",\u003c/clients?page_size=5\u0026page_token=20\u003e; rel=\"last\""
-        },
-        "x-total-count": {
-          "type": "integer",
-          "format": "int64",
-          "description": "The X-Total-Count HTTP Header\n\nThe `X-Total-Count` header contains the total number of items in the collection."
+          "description": "The Link HTTP Header\n\nThe `Link` header contains a comma-delimited list of links to the following pages:\n\nfirst: The first page of results.\nnext: The next page of results.\n\nPages are omitted if they do not exist. For example, if there is no next page, the `next` link is omitted. Examples:\n\n\u003c/admin/sessions?page_size=250\u0026page_token={last_item_uuid}; rel=\"first\",/admin/sessions?page_size=250\u0026page_token=\u003e; rel=\"next\""
         }
       }
     }

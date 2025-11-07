@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/julienschmidt/httprouter"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/toqueteos/webbrowser"
@@ -237,7 +236,7 @@ and success, unless if the --no-shutdown flag is provided.`,
 			}
 			authCodeURL, state := generateAuthCodeURL()
 
-			r := httprouter.New()
+			r := http.NewServeMux()
 			var tlsc *tls.Config
 			if isSSL {
 				key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -257,20 +256,20 @@ and success, unless if the --no-shutdown flag is provided.`,
 				Handler: r, TLSConfig: tlsc,
 				ReadHeaderTimeout: time.Second * 5,
 			})
-			var shutdown = func() {
+			shutdown := func() {
 				time.Sleep(time.Second * 1)
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 				defer cancel()
 				_ = server.Shutdown(ctx)
 			}
 
-			r.GET("/", func(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+			r.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				_ = tokenUserWelcome.Execute(w, &struct{ URL string }{URL: authCodeURL})
-			})
+			}))
 
-			r.GET("/perform-flow", func(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+			r.Handle("GET /perform-flow", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				http.Redirect(w, r, authCodeURL, http.StatusFound)
-			})
+			}))
 
 			rt := router{
 				cl:    client,
@@ -290,12 +289,12 @@ and success, unless if the --no-shutdown flag is provided.`,
 				noShutdown:     noShutdown,
 			}
 
-			r.GET("/login", rt.loginGET)
-			r.POST("/login", rt.loginPOST)
-			r.GET("/consent", rt.consentGET)
-			r.POST("/consent", rt.consentPOST)
-			r.GET("/callback", rt.callback)
-			r.POST("/callback", rt.callbackPOSTForm)
+			r.Handle("GET /login", http.HandlerFunc(rt.loginGET))
+			r.Handle("POST /login", http.HandlerFunc(rt.loginPOST))
+			r.Handle("GET /consent", http.HandlerFunc(rt.consentGET))
+			r.Handle("POST /consent", http.HandlerFunc(rt.consentPOST))
+			r.Handle("GET /callback", http.HandlerFunc(rt.callback))
+			r.Handle("POST /callback", http.HandlerFunc(rt.callbackPOSTForm))
 
 			if !flagx.MustGetBool(cmd, "no-open") {
 				_ = webbrowser.Open(serverLocation) // ignore errors
@@ -355,7 +354,7 @@ type router struct {
 	noShutdown     bool
 }
 
-func (rt *router) loginGET(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (rt *router) loginGET(w http.ResponseWriter, r *http.Request) {
 	req, raw, err := rt.cl.OAuth2API.GetOAuth2LoginRequest(r.Context()).
 		LoginChallenge(r.URL.Query().Get("login_challenge")).
 		Execute()
@@ -363,7 +362,7 @@ func (rt *router) loginGET(w http.ResponseWriter, r *http.Request, _ httprouter.
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer raw.Body.Close() // to satisfy linter
+	defer raw.Body.Close() //nolint:errcheck
 
 	if rt.skip && req.GetSkip() {
 		req, res, err := rt.cl.OAuth2API.AcceptOAuth2LoginRequest(r.Context()).
@@ -374,7 +373,7 @@ func (rt *router) loginGET(w http.ResponseWriter, r *http.Request, _ httprouter.
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer res.Body.Close() // to satisfy linter
+		defer res.Body.Close() //nolint:errcheck
 		http.Redirect(w, r, req.RedirectTo, http.StatusFound)
 		return
 	}
@@ -397,7 +396,7 @@ func (rt *router) loginGET(w http.ResponseWriter, r *http.Request, _ httprouter.
 	})
 }
 
-func (rt *router) loginPOST(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (rt *router) loginPOST(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -408,11 +407,11 @@ func (rt *router) loginPOST(w http.ResponseWriter, r *http.Request, _ httprouter
 			All(true).
 			Execute()
 		if err != nil {
-			fmt.Fprintln(rt.cmd.ErrOrStderr(), "Error revoking previous consents:", err)
+			_, _ = fmt.Fprintln(rt.cmd.ErrOrStderr(), "Error revoking previous consents:", err)
 		} else {
-			fmt.Fprintln(rt.cmd.ErrOrStderr(), "Revoked all previous consents")
+			_, _ = fmt.Fprintln(rt.cmd.ErrOrStderr(), "Revoked all previous consents")
 		}
-		defer res.Body.Close() // to satisfy linter
+		defer res.Body.Close() //nolint:errcheck
 	}
 	switch r.FormValue("action") {
 	case "accept":
@@ -431,7 +430,7 @@ func (rt *router) loginPOST(w http.ResponseWriter, r *http.Request, _ httprouter
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer res.Body.Close() // to satisfy linter
+		defer res.Body.Close() //nolint:errcheck
 		http.Redirect(w, r, req.RedirectTo, http.StatusFound)
 
 	case "deny":
@@ -440,7 +439,7 @@ func (rt *router) loginPOST(w http.ResponseWriter, r *http.Request, _ httprouter
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer res.Body.Close() // to satisfy linter
+		defer res.Body.Close() //nolint:errcheck
 		http.Redirect(w, r, req.RedirectTo, http.StatusFound)
 
 	default:
@@ -448,7 +447,7 @@ func (rt *router) loginPOST(w http.ResponseWriter, r *http.Request, _ httprouter
 	}
 }
 
-func (rt *router) consentGET(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (rt *router) consentGET(w http.ResponseWriter, r *http.Request) {
 	req, raw, err := rt.cl.OAuth2API.GetOAuth2ConsentRequest(r.Context()).
 		ConsentChallenge(r.URL.Query().Get("consent_challenge")).
 		Execute()
@@ -456,7 +455,7 @@ func (rt *router) consentGET(w http.ResponseWriter, r *http.Request, _ httproute
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer raw.Body.Close() // to satisfy linter
+	defer raw.Body.Close() //nolint:errcheck
 
 	if rt.skip && req.GetSkip() {
 		req, res, err := rt.cl.OAuth2API.AcceptOAuth2ConsentRequest(r.Context()).
@@ -479,7 +478,7 @@ func (rt *router) consentGET(w http.ResponseWriter, r *http.Request, _ httproute
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer res.Body.Close() // to satisfy linter
+		defer res.Body.Close() //nolint:errcheck
 		http.Redirect(w, r, req.RedirectTo, http.StatusFound)
 		return
 	}
@@ -498,7 +497,7 @@ func (rt *router) consentGET(w http.ResponseWriter, r *http.Request, _ httproute
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer raw.Body.Close() // to satisfy linter
+	defer raw.Body.Close() //nolint:errcheck
 	prettyPrevConsent, err := prettyJSON(raw.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -523,7 +522,7 @@ func (rt *router) consentGET(w http.ResponseWriter, r *http.Request, _ httproute
 	})
 }
 
-func (rt *router) consentPOST(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (rt *router) consentPOST(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -550,7 +549,7 @@ func (rt *router) consentPOST(w http.ResponseWriter, r *http.Request, _ httprout
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer res.Body.Close() // to satisfy linter
+		defer res.Body.Close() //nolint:errcheck
 		http.Redirect(w, r, req.RedirectTo, http.StatusFound)
 
 	case "deny":
@@ -561,7 +560,7 @@ func (rt *router) consentPOST(w http.ResponseWriter, r *http.Request, _ httprout
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer res.Body.Close() // to satisfy linter
+		defer res.Body.Close() //nolint:errcheck
 		http.Redirect(w, r, req.RedirectTo, http.StatusFound)
 
 	default:
@@ -569,7 +568,7 @@ func (rt *router) consentPOST(w http.ResponseWriter, r *http.Request, _ httprout
 	}
 }
 
-func (rt *router) callback(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (rt *router) callback(w http.ResponseWriter, r *http.Request) {
 	defer rt.onDone()
 
 	if len(r.URL.Query().Get("error")) > 0 {
@@ -598,7 +597,7 @@ func (rt *router) callback(w http.ResponseWriter, r *http.Request, _ httprouter.
 	}
 
 	code := r.URL.Query().Get("code")
-	ctx := context.WithValue(rt.cmd.Context(), oauth2.HTTPClient, rt.cl)
+	ctx := context.WithValue(rt.cmd.Context(), oauth2.HTTPClient, rt.cl.GetConfig().HTTPClient)
 	token, err := rt.conf.Exchange(ctx, code)
 	if err != nil {
 		_, _ = fmt.Fprintf(rt.cmd.ErrOrStderr(), "Unable to exchange code for token: %s\n", err)
@@ -628,7 +627,7 @@ func (rt *router) callback(w http.ResponseWriter, r *http.Request, _ httprouter.
 	})
 }
 
-func (rt *router) callbackPOSTForm(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (rt *router) callbackPOSTForm(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
