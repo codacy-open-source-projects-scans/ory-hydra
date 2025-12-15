@@ -7,7 +7,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/ory/x/contextx"
 	"github.com/pkg/errors"
 
 	"github.com/ory/hydra/v2/client"
@@ -20,6 +19,7 @@ import (
 	"github.com/ory/hydra/v2/persistence"
 	"github.com/ory/hydra/v2/x"
 	"github.com/ory/pop/v6"
+	"github.com/ory/x/contextx"
 	"github.com/ory/x/dbal"
 	"github.com/ory/x/logrusx"
 )

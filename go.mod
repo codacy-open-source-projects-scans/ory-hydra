@@ -26,7 +26,6 @@ require (
 	github.com/gorilla/sessions v1.4.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/jackc/pgx/v5 v5.7.5
-	github.com/julienschmidt/httprouter v1.3.0
 	github.com/magiconair/properties v1.8.9
 	github.com/mattn/goveralls v0.0.12
 	github.com/miekg/pkcs11 v1.1.1
@@ -40,7 +39,7 @@ require (
 	github.com/ory/hydra-client-go/v2 v2.2.1
 	github.com/ory/jsonschema/v3 v3.0.9-0.20250317235931-280c5fc7bf0e
 	github.com/ory/kratos-client-go v1.3.8
-	github.com/ory/pop/v6 v6.3.1
+	github.com/ory/pop/v6 v6.3.2-0.20251203152233-a32233875f7e
 	github.com/ory/x v0.0.724
 	github.com/parnurzeal/gorequest v0.3.0
 	github.com/pborman/uuid v1.2.1
@@ -68,7 +67,7 @@ require (
 	golang.org/x/crypto v0.45.0
 	golang.org/x/exp v0.0.0-20250813145105-42675adae3e6
 	golang.org/x/net v0.47.0
-	golang.org/x/oauth2 v0.33.0
+	golang.org/x/oauth2 v0.34.0
 	golang.org/x/sync v0.18.0
 	golang.org/x/text v0.31.0
 )
@@ -171,6 +170,7 @@ require (
 	github.com/jmoiron/sqlx v1.4.0 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
+	github.com/julienschmidt/httprouter v1.3.1-0.20240130105656-484018016424 // indirect
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/knadh/koanf/parsers/json v0.1.0 // indirect

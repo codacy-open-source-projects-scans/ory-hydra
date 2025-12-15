@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ory/x/configx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/ory/hydra/v2/oauth2"
 	"github.com/ory/hydra/v2/x"
 	"github.com/ory/hydra/v2/x/oauth2cors"
+	"github.com/ory/x/configx"
 	"github.com/ory/x/dbal"
 )
 

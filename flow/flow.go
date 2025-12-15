@@ -457,6 +457,10 @@ func (f *Flow) GetConsentRequest(challenge string) *OAuth2ConsentRequest {
 		AMR:                  f.AMR,
 		Context:              f.Context,
 	}
+	// set some defaults for the API
+	if cs.RequestedAudience == nil {
+		cs.RequestedAudience = []string{}
+	}
 	if cs.AMR == nil {
 		cs.AMR = []string{}
 	}
@@ -480,6 +484,9 @@ func (f *Flow) BeforeSave(_ *pop.Connection) error {
 func (f *Flow) AfterFind(c *pop.Connection) error {
 	// TODO Populate the client field in FindInDB and FindByConsentChallengeID in
 	// order to avoid accessing the database twice.
+	if f.ClientID == "" {
+		return nil
+	}
 	f.AfterSave(c)
 	f.Client = &client.Client{}
 	return sqlcon.HandleError(c.Where("id = ? AND nid = ?", f.ClientID, f.NID).First(f.Client))
@@ -553,5 +560,9 @@ func (f Flow) ToListConsentSessionResponse() *OAuth2ConsentSession {
 		ConsentRequest:   f.GetConsentRequest( /* No longer available and no longer needed: challenge =  */ ""),
 	}
 	s.ConsentRequest.Client.Secret = "" // do not leak client secret in response
+	// set some defaults for the API
+	if s.GrantedAudience == nil {
+		s.GrantedAudience = []string{}
+	}
 	return s
 }

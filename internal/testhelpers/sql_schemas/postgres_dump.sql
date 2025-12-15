@@ -1,4 +1,4 @@
--- migrations hash: dafe7028cc42e8a804b6ca0417a404daace09184350797a13e1d2806ea4fca6f396db0df017f7485191dbb9c9e922cc4e11a9c10c7b79bc5b150776e0e9a0f30
+-- migrations hash: 55b905a5cead652db5b4a5e317d60ad18bd9e6de61d4b43edcdb79244947fbf9b106783f10765f2ffa4d7952c745900c2406f522a101dbed17e5785396484e41
 
 
 
@@ -194,43 +194,43 @@ ALTER TABLE public.hydra_oauth2_device_auth_codes OWNER TO postgres;
 
 CREATE TABLE public.hydra_oauth2_flow (
     login_challenge character varying(40) NOT NULL,
-    login_verifier character varying(40) NOT NULL,
-    login_csrf character varying(40) NOT NULL,
-    subject character varying(255) NOT NULL,
-    request_url text NOT NULL,
-    login_skip boolean NOT NULL,
-    client_id character varying(255) NOT NULL,
+    login_verifier character varying(40),
+    login_csrf character varying(40),
+    subject character varying(255),
+    request_url text,
+    login_skip boolean,
+    client_id character varying(255),
     requested_at timestamp without time zone DEFAULT now() NOT NULL,
     login_initialized_at timestamp without time zone,
-    oidc_context jsonb DEFAULT '{}'::jsonb NOT NULL,
+    oidc_context jsonb,
     login_session_id character varying(40),
-    state integer NOT NULL,
-    login_remember boolean DEFAULT false NOT NULL,
-    login_remember_for integer NOT NULL,
+    state integer,
+    login_remember boolean,
+    login_remember_for integer,
     login_error text,
-    acr text DEFAULT ''::text NOT NULL,
+    acr text,
     login_authenticated_at timestamp without time zone,
-    login_was_used boolean DEFAULT false NOT NULL,
-    forced_subject_identifier character varying(255) DEFAULT ''::character varying NOT NULL,
-    context jsonb DEFAULT '{}'::jsonb NOT NULL,
+    login_was_used boolean,
+    forced_subject_identifier character varying(255),
+    context jsonb,
     consent_challenge_id character varying(40),
-    consent_skip boolean DEFAULT false NOT NULL,
+    consent_skip boolean,
     consent_verifier character varying(40),
     consent_csrf character varying(40),
-    consent_remember boolean DEFAULT false NOT NULL,
+    consent_remember boolean,
     consent_remember_for integer,
     consent_handled_at timestamp without time zone,
     consent_error text,
-    session_access_token jsonb DEFAULT '{}'::jsonb NOT NULL,
-    session_id_token jsonb DEFAULT '{}'::jsonb NOT NULL,
-    consent_was_used boolean DEFAULT false NOT NULL,
+    session_access_token jsonb,
+    session_id_token jsonb,
+    consent_was_used boolean,
     nid uuid NOT NULL,
-    requested_scope jsonb NOT NULL,
-    requested_at_audience jsonb DEFAULT '[]'::jsonb,
-    amr jsonb DEFAULT '[]'::jsonb,
+    requested_scope jsonb,
+    requested_at_audience jsonb,
+    amr jsonb,
     granted_scope jsonb,
-    granted_at_audience jsonb DEFAULT '[]'::jsonb,
-    login_extend_session_lifespan boolean DEFAULT false NOT NULL,
+    granted_at_audience jsonb,
+    login_extend_session_lifespan boolean,
     identity_provider_session_id character varying(40),
     device_challenge_id character varying(255),
     device_code_request_id character varying(255),
@@ -243,8 +243,7 @@ CREATE TABLE public.hydra_oauth2_flow (
 CASE
     WHEN (consent_remember_for > 0) THEN (requested_at + ((consent_remember_for)::double precision * '00:00:01'::interval))
     ELSE NULL::timestamp without time zone
-END) STORED,
-    CONSTRAINT hydra_oauth2_flow_check CHECK (((state = 128) OR (state = 129) OR (state = 1) OR ((state = 2) AND ((login_remember IS NOT NULL) AND (login_remember_for IS NOT NULL) AND (login_error IS NOT NULL) AND (acr IS NOT NULL) AND (login_was_used IS NOT NULL) AND (context IS NOT NULL) AND (amr IS NOT NULL))) OR ((state = 3) AND ((login_remember IS NOT NULL) AND (login_remember_for IS NOT NULL) AND (login_error IS NOT NULL) AND (acr IS NOT NULL) AND (login_was_used IS NOT NULL) AND (context IS NOT NULL) AND (amr IS NOT NULL))) OR ((state = 4) AND ((login_remember IS NOT NULL) AND (login_remember_for IS NOT NULL) AND (login_error IS NOT NULL) AND (acr IS NOT NULL) AND (login_was_used IS NOT NULL) AND (context IS NOT NULL) AND (amr IS NOT NULL) AND (consent_challenge_id IS NOT NULL) AND (consent_verifier IS NOT NULL) AND (consent_skip IS NOT NULL) AND (consent_csrf IS NOT NULL))) OR ((state = 5) AND ((login_remember IS NOT NULL) AND (login_remember_for IS NOT NULL) AND (login_error IS NOT NULL) AND (acr IS NOT NULL) AND (login_was_used IS NOT NULL) AND (context IS NOT NULL) AND (amr IS NOT NULL) AND (consent_challenge_id IS NOT NULL) AND (consent_verifier IS NOT NULL) AND (consent_skip IS NOT NULL) AND (consent_csrf IS NOT NULL))) OR ((state = 6) AND ((login_remember IS NOT NULL) AND (login_remember_for IS NOT NULL) AND (login_error IS NOT NULL) AND (acr IS NOT NULL) AND (login_was_used IS NOT NULL) AND (context IS NOT NULL) AND (amr IS NOT NULL) AND (consent_challenge_id IS NOT NULL) AND (consent_verifier IS NOT NULL) AND (consent_skip IS NOT NULL) AND (consent_csrf IS NOT NULL) AND (granted_scope IS NOT NULL) AND (consent_remember IS NOT NULL) AND (consent_remember_for IS NOT NULL) AND (consent_error IS NOT NULL) AND (session_access_token IS NOT NULL) AND (session_id_token IS NOT NULL) AND (consent_was_used IS NOT NULL)))))
+END) STORED
 );
 
 ALTER TABLE public.hydra_oauth2_flow OWNER TO postgres;
